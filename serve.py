@@ -40,7 +40,21 @@ DROP_REQUEST = {
     "transfer-encoding", "upgrade", "origin", "referer", "accept-encoding",
     "content-length", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
     "sec-fetch-user",
+    # The Coder token the UI sends so Coder's app proxy lets it through; the
+    # backend has no use for it.
+    "coder-session-token",
 }
+# The same token in a query string (EventSource can't send headers).
+TOKEN_PARAM = "coder_session_token"
+
+
+def strip_token(path: str) -> str:
+    """`path` without the Coder token in its query, for forwarding and logs."""
+    base, sep, query = path.partition("?")
+    if not sep:
+        return path
+    kept = [p for p in query.split("&") if p.split("=", 1)[0] != TOKEN_PARAM]
+    return base + ("?" + "&".join(kept) if kept else "")
 DROP_RESPONSE = {
     "connection", "keep-alive", "transfer-encoding", "content-length", "server", "date",
     "access-control-allow-origin", "access-control-allow-credentials",
@@ -88,7 +102,8 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
         if "/stream" in self.path and os.environ.get("XO_UI_QUIET_STREAM", "1") == "1":
             return
-        sys.stderr.write("%s - %s\n" % (self.log_date_time_string(), fmt % args))
+        line = (fmt % args).replace(self.path, strip_token(self.path))
+        sys.stderr.write("%s - %s\n" % (self.log_date_time_string(), line))
 
     # ── same-origin check for writes ─────────────────────────────────────────
     def _write_allowed(self) -> bool:
@@ -131,7 +146,7 @@ class Handler(SimpleHTTPRequestHandler):
         headers["Accept-Encoding"] = "identity"
         if body is not None:
             headers["Content-Length"] = str(len(body))
-        target = (_UP.path.rstrip("/") or "") + self.path
+        target = (_UP.path.rstrip("/") or "") + strip_token(self.path)
         is_stream = "/stream" in self.path.split("?", 1)[0]
 
         conn_cls = http.client.HTTPSConnection if _UP.scheme == "https" else http.client.HTTPConnection
