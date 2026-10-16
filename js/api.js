@@ -2,6 +2,33 @@
 
 const BASE = "/api/projects-chat";
 
+// Inside a Coder workspace, the app is opened at `?coder_session_token=…`
+// (xo-swarm does this). Coder accepts that for the page load, but the cookie
+// it sets lasts a minute, after which every request here is redirected to
+// Coder's sign-in on another origin and fails CORS. So the token is kept for
+// this tab, taken out of the address bar, and sent on every request.
+const TOKEN_PARAM = "coder_session_token";
+const TOKEN_KEY = "xo-coder-token";
+const coderToken = (() => {
+  let token = null;
+  try {
+    const url = new URL(location.href);
+    token = url.searchParams.get(TOKEN_PARAM);
+    if (token) {
+      url.searchParams.delete(TOKEN_PARAM);
+      history.replaceState(history.state, "", url);
+    }
+  } catch { /* not in a browser */ }
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else token = sessionStorage.getItem(TOKEN_KEY);
+  } catch { /* storage blocked: this page load still has the token */ }
+  return token;
+})();
+
+/** Headers that keep Coder's app proxy signing requests in. */
+export const coderHeaders = () => (coderToken ? { "Coder-Session-Token": coderToken } : {});
+
 export class ApiError extends Error {
   constructor(status, code, message) {
     super(message);
@@ -16,13 +43,18 @@ async function request(path, { method = "GET", body, signal, base = BASE } = {})
     res = await fetch(base + path, {
       method,
       signal,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...coderHeaders() },
       body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
+      // A redirect here is Coder sending us to sign in, which fetch can't follow.
+      redirect: "manual",
     });
   } catch (err) {
     if (err.name === "AbortError") throw err;
     throw new ApiError(0, "network", "Can't reach the UI server. Is serve.py running?");
+  }
+  if (res.type === "opaqueredirect") {
+    throw new ApiError(401, "signed_out", "Signed out of the workspace. Reopen this app from XO.");
   }
   let data = null;
   const text = await res.text();
@@ -71,6 +103,12 @@ export const api = {
       method: "POST",
       body: { path, scaffold: true, display_name: displayName, ...(description ? { description } : {}) },
     }),
-  streamUrl: (chat, after) =>
-    `${BASE}/chats/${enc(chat)}/stream${after ? "?after=" + enc(after) : ""}`,
+  // EventSource can't send headers, so the token rides in the query instead.
+  streamUrl: (chat, after) => {
+    const q = new URLSearchParams();
+    if (after) q.set("after", after);
+    if (coderToken) q.set(TOKEN_PARAM, coderToken);
+    const qs = q.toString();
+    return `${BASE}/chats/${enc(chat)}/stream${qs ? "?" + qs : ""}`;
+  },
 };

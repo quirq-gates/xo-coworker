@@ -25,6 +25,7 @@
 // /api/projects-chat/chats/{chat}/intelligence (and per thread): R6.
 import { esc } from "./world.js";
 import { ICON, RM } from "./ui.js";
+import { coderHeaders } from "./api.js";
 
 export const DEPTH = {
   1: { name: "Quick", pips: "·", effort: "low" },
@@ -165,7 +166,7 @@ export function createIntel({ world, PROJ, params, onChange, record }) {
     const t = kind === "thread" ? world.thread(id) : null;
     const url = kind === "chat" ? `/api/projects-chat/chats/${encodeURIComponent(id)}/intelligence` : `/api/projects-chat/chats/${encodeURIComponent(t?.project || "workspace")}/threads/${encodeURIComponent(id)}/intelligence`;
     try {
-      const r = await fetch(url, value ? { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ routing: value.routing, model: value.model, effort: DEPTH[value.depth].effort, pinned: true }) } : { method: "DELETE" });
+      const r = await fetch(url, value ? { method: "PUT", headers: { "content-type": "application/json", ...coderHeaders() }, body: JSON.stringify({ routing: value.routing, model: value.model, effort: DEPTH[value.depth].effort, pinned: true }) } : { method: "DELETE", headers: coderHeaders() });
       return r.ok ? { ok: true } : { ok: false, why: "The server can't pin this yet." };
     } catch { return { ok: false, why: "The server couldn't be reached." }; }
   }
