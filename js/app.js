@@ -26,6 +26,7 @@ import { ICON, XO, NEXT_GLYPH, $, $$, RM, clock, dayOf, short, elapsed, reconcil
 import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText } from "./timeline.js";
 import { turnHtml } from "./turnview.js";
 import { itemParts } from "./review.js";
+import { runsStripHtml, runsListHtml, runViewHtml } from "./runsview.js";
 
 const world = createWorld();
 // Demo-only features (seeded content, the night, rules, finds, Stop) never run against the real backend.
@@ -953,8 +954,117 @@ function checklistRender(needs) {
     `<span class="ck-segs" aria-hidden="true">${segs}</span><span class="ck-n">${c.done} of ${c.total}</span>` +
     `<span class="ck-now" data-mode="${mode}">${nowHtml}</span>${t.branch ? `<code class="ck-br">${ICON.branch}${esc(t.branch)}</code>` : ""}<span class="ck-chev">${ICON.chevron}</span></button></div>` +
     `<div class="ck-b"><ol class="ck-list" id="ck-list" aria-label="Checklist">${list}</ol></div></div>`;
-  patch(th, html);
+  patch(th, html + runsStrip(t));
 }
+
+// ── sub-agents (U2, ch 14 §11): working now under the checklist; the list and each run in a sheet ──
+const LIVE_RUN = (r) => r.state === "running" || r.state === "waiting";
+function runsStrip(t) {
+  if (DEMO || !t.sessionId || !world.state.runs) return "";
+  const mine = [...world.state.runs.values()].filter((r) => r.session === t.sessionId && !r.hidden);
+  const live = mine.filter((r) => LIVE_RUN(r) && (r.depth || 1) === 1);
+  const total = Math.max((t.runs && t.runs.total) || 0, mine.length);
+  return runsStripHtml(live, total);
+}
+const runsEl = $("#runs"), runsCard = $("#runs-card");
+const RS = { open: false, session: null, title: "", view: "list", tree: [], counts: null, runId: null, run: null, anc: null, items: [], cursor: null, children: [], loading: false, error: null, gone: null, pollT: null, returnTo: null };
+const canStopRuns = () => !!(RS.session && world.act.feature && world.act.feature(RS.session, "runs.stop"));
+function runsRender() {
+  if (!RS.open) return;
+  const html = RS.view === "list"
+    ? runsListHtml(RS.tree, RS.counts, { canStop: canStopRuns(), title: RS.title })
+    : runViewHtml(RS.run || { id: RS.runId, title: "Sub-agent", state: "running" }, { anc: RS.anc, items: RS.items, children: RS.children, canStop: canStopRuns(), gone: RS.gone, error: RS.error, loading: RS.loading, open: S.tbOpen });
+  if (runsCard._h !== html) {
+    const body = runsCard.querySelector(".rn-body");
+    const keep = body ? body.scrollTop : 0;
+    runsCard.innerHTML = html; runsCard._h = html;
+    for (const x of runsCard.querySelectorAll("[data-close]")) x.innerHTML = ICON.close;
+    const nb = runsCard.querySelector(".rn-body");
+    if (nb && RS.keepScroll) nb.scrollTop = keep;
+    // a re-render must not drop focus out of the sheet (Escape, Tab stay inside it)
+    if (!runsEl.contains(document.activeElement)) runsCard.focus({ preventScroll: true });
+  }
+}
+function runsEscape() { if (RS.view === "run") { RS.view = "list"; RS.runId = null; clearTimeout(RS.pollT); RS.keepScroll = false; runsRender(); } else closeRuns(); }
+async function openRuns(t, runId = null) {
+  if (!t || !t.sessionId) return;
+  if (!RS.open) RS.returnTo = document.activeElement;
+  Object.assign(RS, { open: true, session: t.sessionId, title: t.title, view: runId ? "run" : "list", runId, keepScroll: false });
+  runsEl.hidden = false;
+  runsRender();
+  try {
+    const d = await world.act.listRuns(t.sessionId);
+    RS.tree = d.runs || []; RS.counts = d.counts || null;
+  } catch (err) { RS.error = err.message; }
+  if (runId) openRun(runId); else { runsRender(); runsCard.querySelector(".rn-open, [data-close]")?.focus(); }
+}
+async function openRun(id) {
+  clearTimeout(RS.pollT);
+  Object.assign(RS, { view: "run", runId: id, run: world.state.runs.get(id) || null, anc: null, items: [], cursor: null, children: [], loading: true, error: null, gone: null, keepScroll: false });
+  runsRender();
+  try {
+    const r = await world.act.run(id);
+    RS.run = { ...(world.state.runs.get(id) || {}), ...r, title: r.title || r.agent_type || "Sub-agent" };
+    RS.anc = r.ancestry || null;
+    const findKids = (nodes) => { for (const n of nodes || []) { if (n.id === id) return n.children || []; const k = findKids(n.children); if (k) return k; } return null; };
+    RS.children = findKids(RS.tree) || [];
+  } catch (err) { RS.error = err.message; }
+  await readTranscript(id);
+  runsCard.querySelector(".rn-back")?.focus();
+}
+/** Read the transcript; while the run works, read again from the last cursor and add only new items. */
+async function readTranscript(id) {
+  if (RS.runId !== id || !RS.open) return;
+  try {
+    let more = true, guard = 0;
+    while (more && guard++ < 20) {
+      const d = await world.act.transcript(id, RS.cursor);
+      const have = new Set(RS.items.map((i) => i.id));
+      RS.items.push(...(d.items || []).filter((i) => !have.has(i.id)));
+      if (d.next) RS.cursor = d.next;
+      more = !!d.next && (d.items || []).length > 0;
+    }
+  } catch (err) {
+    if (err.code === "transcript_gone") RS.gone = err.summary || err.message;
+    else if (err.status === 501) RS.error = "This agent can't show a sub-agent's work.";
+    else RS.error = err.message;
+  }
+  RS.loading = false;
+  RS.keepScroll = true;
+  runsRender();
+  const live = world.state.runs.get(id);
+  if (RS.runId === id && RS.open && (!live || LIVE_RUN(live)) && !RS.gone && !RS.error) RS.pollT = setTimeout(() => readTranscript(id), 2500);
+}
+function closeRuns() {
+  if (!RS.open) return;
+  clearTimeout(RS.pollT);
+  RS.open = false; runsEl.hidden = true; runsCard.innerHTML = ""; runsCard._h = "";
+  RS.returnTo?.focus?.({ preventScroll: true });
+}
+/** Stop one sub-agent, or all of a session's, after a 3 s Undo. */
+function stopRunsUndo(what, fn) {
+  let cancelled = false;
+  heraldShow({ kind: "halt", text: "Stopping", sub: what, undo: () => { cancelled = true; announce("Not stopped."); } }, Kit.COMMIT_MS);
+  announce(`Stopping ${what} in 3 seconds. Undo to keep it.`);
+  setTimeout(async () => {
+    if (cancelled) return;
+    try { await fn(); heraldShow({ kind: "halt", text: "Stopped", sub: what }, 3600); }
+    catch (err) { heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: err.status === 501 ? "this agent can't stop a sub-agent; stop the thread instead" : err.message }, 6000); }
+    if (RS.open && RS.session) { try { const d = await world.act.listRuns(RS.session); RS.tree = d.runs || []; RS.counts = d.counts || null; } catch { /* the stream says it too */ } runsRender(); }
+  }, Kit.COMMIT_MS);
+}
+runsEl.addEventListener("click", (e) => {
+  if (e.target === runsEl || e.target.closest("[data-close]")) { closeRuns(); return; }
+  const tb = e.target.closest("[data-tb]");
+  if (tb) { S.tbOpen[tb.dataset.tb] = !S.tbOpen[tb.dataset.tb]; RS.keepScroll = true; runsRender(); return; }
+  if (e.target.closest("[data-runs-back]")) { clearTimeout(RS.pollT); RS.view = "list"; RS.runId = null; RS.keepScroll = false; runsRender(); return; }
+  const st = e.target.closest("[data-run-stop]");
+  if (st) { const r = world.state.runs.get(st.dataset.runStop) || { title: "this sub-agent" }; stopRunsUndo(r.title, () => world.act.stopRun(st.dataset.runStop)); return; }
+  if (e.target.closest("[data-runs-stop]")) { const sid = RS.session; stopRunsUndo("every sub-agent of this thread", () => world.act.stopRuns(sid)); return; }
+  const op = e.target.closest("[data-run]");
+  if (op) openRun(op.dataset.run);
+});
+runsEl.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); runsEscape(); } });
 
 // ── the thread's own decision: docked above the composer (Today's card, #20) ──
 const tdock = $("#tdock");
@@ -1153,7 +1263,15 @@ function growSay() {
 }
 /** What would Stop stop here? The coordinator replying, or this thread's agent working. */
 function running() {
-  if (!DEMO) return null; // the backend has no stop route yet
+  if (!DEMO) {
+    // live: a thread whose session works, or the coordinator of this chat while it works
+    if (S.stopping && S.stopping.until > Date.now()) return null; // a Stop is waiting out its Undo
+    const t = convThread(S.view);
+    if (t) return t.busy && t.sessionId ? { kind: "thread", t, session: t.sessionId } : null;
+    const chat = chatOf(S.view);
+    const sid = chat && world.act.coordinatorBusy ? world.act.coordinatorBusy(chat) : null;
+    return sid ? { kind: "coord", conv: S.view, session: sid } : null;
+  }
   if (S.typing[S.view]) return { kind: "coord", conv: S.view };
   const t = convThread(S.view);
   if (t && t.state === "working") return { kind: "thread", t };
@@ -1249,10 +1367,39 @@ $("#target").addEventListener("click", () => {
 });
 $("#iq").addEventListener("click", () => { if (IQ.isOpen) IQ.close(); else IQ.open(sessionOf(S.view), $("#iq")); });
 
+/**
+ * Live Stop: nothing is sent for 3 s (Undo), then the session's turn and its sub-agents stop at once
+ * (POST /api/chat/abort). The turn's own record then says what ran: "Stopped after …".
+ */
+function stopLive(run) {
+  const until = Date.now() + Kit.COMMIT_MS;
+  const what = run.kind === "thread" ? run.t.title : run.conv === "ws" ? "The coordinator" : `${PROJ(chatOf(run.conv))} coordinator`;
+  const token = { session: run.session, until, cancelled: false };
+  S.stopping = token;
+  heraldShow({ kind: "halt", text: "Stopping", sub: what, undo: () => { token.cancelled = true; S.stopping = null; announce("Not stopped. It keeps working."); schedule(); } }, Kit.COMMIT_MS);
+  announce(`Stopping ${what} in 3 seconds. Undo to keep it working.`);
+  sound.play("back");
+  schedule();
+  setTimeout(async () => {
+    if (token.cancelled) return;
+    try {
+      const r = await world.act.stop(token.session);
+      heraldShow({ kind: "halt", text: r && r.stopped === false ? "It had already finished" : "Stopped", sub: r && r.stopped === false ? what : `${what} · what it did is kept` }, 4200);
+      announce(r && r.stopped === false ? "It had already finished." : `Stopped ${what}. What it did is kept.`);
+    } catch (err) {
+      heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: err.message, undo: () => stopRun(), undoLabel: "Retry" }, 7000);
+    } finally {
+      if (S.stopping === token) S.stopping = null;
+      schedule();
+    }
+  }, Kit.COMMIT_MS);
+}
+
 /** Stop: the run halts honestly; what's done is kept and said so. */
 function stopRun() {
   const run = running();
   if (!run) return;
+  if (!DEMO) { stopLive(run); return; }
   if (run.kind === "coord") {
     S.stopped[run.conv] = true;
     delete S.typing[run.conv];
@@ -1659,6 +1806,12 @@ document.addEventListener("click", (e) => {
   const ru = t.closest("[data-rec-undo]");
   if (ru) { undoRecord(ru.dataset.recUndo); return; }
   if (t.closest("[data-herald-undo]")) { const u = S.herald?.undo; if (typeof u === "function") { S.herald.until = 0; schedule(); u(); } else if (u) undoRecord(u); return; }
+  // sub-agents: the strip under the checklist, the log, a sub-agent's row in a turn
+  const rc = t.closest("[data-run-call]");
+  if (rc) { const th = convThread(S.view); const r = [...(world.state.runs?.values() || [])].find((x) => x.spawn === rc.dataset.runCall); openRuns(th, r ? r.id : null); return; }
+  const ro = t.closest("#thead [data-run]");
+  if (ro) { openRuns(convThread(S.view), ro.dataset.run); return; }
+  if (t.closest("#thead [data-runs]")) { openRuns(convThread(S.view)); return; }
   // storm blocks: open or fold a block or a row (thinking steps, an activity group, a command's output)
   const tb = t.closest("[data-tb]");
   if (tb) { const k = tb.dataset.tb; S.tbOpen[k] = !S.tbOpen[k]; schedule(); return; }
@@ -2010,6 +2163,7 @@ addEventListener("keydown", (e) => {
   for (const id of ["jump", "intel"]) if (K.hasMod(id) && K.is(e, id)) { e.preventDefault(); GLOBAL[id](); return; }
   if (!jump.hidden || dlg.open || IQ.isOpen) return;
   if (e.key === "Escape") {
+    if (RS.open) { runsEscape(); return; }
     if (!keys.hidden) { closeKeys(); return; }
     if (!setEl.hidden) { closeSettings(); return; }
     if (!allEl.hidden) { closeAll(); return; }

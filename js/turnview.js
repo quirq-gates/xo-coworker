@@ -40,6 +40,8 @@ function rowHtml(r, open) {
   const head = `<span class="tb-ri">${icon(r.kind || "other")}</span><span class="tb-rl">${renderInline(r.line || "", true)}</span>` +
     (prog ? `<span class="tb-rp">${esc(prog)}</span>` : "") + rowMark(r);
   const cls = `tb-row s-${esc(r.status || "ok")}${r.waiting ? " is-waiting" : ""}${r.pending ? " is-pending" : ""}`;
+  // a sub-agent's row opens that sub-agent, like a thread of its own (ch 14 §11)
+  if (r.kind === "subagent" && r.call_id) return `<li class="${cls}"><button type="button" class="tb-rh is-btn" data-run-call="${esc(r.call_id)}" title="Open this sub-agent">${head}</button></li>`;
   if (!canOpen) return `<li class="${cls}"><div class="tb-rh">${head}</div></li>`;
   const key = `row:${r.call_id}`;
   const isOpen = !!open[key];

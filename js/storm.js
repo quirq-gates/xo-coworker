@@ -42,6 +42,8 @@ export function stormSource(state, emit, event) {
     failed: {},      // project id → {at, error}: the coordinator's turn for our message failed
     routed: {},      // workspace message id → [{chat: project id}]
     review: new Map(), // open review items by id
+    runs: new Map(),   // sub-agent runs seen on the stream (run_… → summary), live list and log (ch 14 §11)
+    liveRuns: {},      // session → {running, waiting, tokens} from the live `runs` frames
     turns: createTurns(),
     lastSeq: 0,
   });
@@ -53,6 +55,7 @@ export function stormSource(state, emit, event) {
   let statusT = null, runtimesT = null, recoverT = null;
   let chatsAt = 0, chatsBusy = null;
   const watched = { projects: new Set(), thread: null }; // what's on screen, to reload after a reset
+  const trimmed = new Set(); // sessions whose older turns were pruned (read again when shown)
   let firstFrame = null;
   const sawFrame = new Promise((r) => { firstFrame = r; });
 
@@ -175,7 +178,8 @@ export function stormSource(state, emit, event) {
     if (!state.error && state.projects.length) return;
     recovering = (async () => {
       holding = true;
-      try { await loadAll(); } finally {
+      // live updates wait at most 15 s for the reload; a hung GET doesn't freeze the page
+      try { await Promise.race([loadAll(), new Promise((r) => setTimeout(r, 15000))]); } finally {
         commit();
         holding = false;
         for (const f of held.splice(0)) apply(f);
@@ -459,6 +463,27 @@ export function stormSource(state, emit, event) {
       case "pool":
         if (d.pool) { state.pools[d.pool] = { ...(state.pools[d.pool] || {}), ...d }; emit(); }
         break;
+      case "run.started": {
+        const i = d.info || {};
+        state.runs.set(d.run_id, { ...(state.runs.get(d.run_id) || {}), id: d.run_id, session: env.session_id, parent: d.parent_run_id || null, state: d.state || "running", title: i.title || i.agent_type || "Sub-agent", kind: i.kind || "subagent", background: !!i.background, depth: i.depth || 1, model: i.model || null, spawn: i.spawn_call_id || null, started_at: env.ts, hidden: !!i.hidden });
+        emitSoon();
+        break;
+      }
+      case "run.state": {
+        const r = state.runs.get(d.run_id);
+        if (r) { state.runs.set(d.run_id, { ...r, state: d.state || r.state, stopping: !!d.stop_requested_at, background: d.background ?? r.background }); emitSoon(); }
+        break;
+      }
+      case "run.finished": {
+        const r = state.runs.get(d.run_id) || { id: d.run_id, session: env.session_id, title: "Sub-agent", kind: "subagent" };
+        state.runs.set(d.run_id, { ...r, state: d.state || "finished", status: d.status, summary: d.summary || null, tokens: d.tokens ?? r.tokens, tool_calls: d.tool_calls ?? r.tool_calls, last_tool: d.last_tool ?? r.last_tool, stopped_by: d.stopped_by || null, ended_at: env.ts });
+        emitSoon();
+        break;
+      }
+      case "runs": {
+        if (d.session) { state.liveRuns[d.session] = { running: d.running || 0, waiting: d.waiting || 0, tokens: d.tokens || 0 }; emitSoon(); }
+        break;
+      }
       case "review.opened":
         state.review.set(d.id, { ...d, state: "open", seq: env.seq ?? null });
         soon();
@@ -535,7 +560,6 @@ export function stormSource(state, emit, event) {
     emit();
   }
   boot();
-  const trimmed = new Set(); // sessions whose older turns were pruned
   setInterval(() => {
     const keep = new Set();
     const t = watched.thread && rawThreads.get(watched.thread);
@@ -658,6 +682,32 @@ export function stormSource(state, emit, event) {
         const bl = state.turns.blocksOf(t);
         const last = bl[bl.length - 1];
         return last ? (last.header || (last.type === "text" ? "Writing" : null)) : null;
+      },
+      /** A session's runs as a tree (the live list and the log), with counts (UI-reference §2.6). */
+      listRuns: async (session) => {
+        const d = await api.runs(session, { tree: "true", depth: 3, limit: 200 });
+        const walk = (nodes) => { for (const n of nodes || []) { state.runs.set(n.id, { ...(state.runs.get(n.id) || {}), id: n.id, session, parent: n.parent_run_id || null, state: n.state, title: n.title || n.agent_type || "Sub-agent", kind: n.kind, background: !!n.background, depth: n.depth, spawn: n.spawn_call_id || null, started_at: n.started_at, ended_at: n.ended_at, summary: n.summary, tokens: n.tokens, tool_calls: n.tool_calls, last_tool: n.last_tool, can_stop: n.can_stop }); walk(n.children); } };
+        walk(d.runs);
+        return d;
+      },
+      run: (id) => api.run(id),
+      transcript: (id, after) => api.transcript(id, after ? { after, limit: 200 } : { limit: 200 }),
+      stopRun: (id) => api.stopRun(id),
+      stopRuns: (session) => api.stopRuns(session),
+      /** What a session's runtime offers (its feature list), e.g. "runs.stop" — never decided by agent name. */
+      feature: (session, key) => {
+        const s = state.sessions[session];
+        const rt = (state.runtimes || []).find((r) => r.name === (s && s.agent)) || (state.runtimes || [])[0];
+        const f = rt && rt.features && rt.features.features && rt.features.features[key];
+        return !!f && (f.support === "native" || f.support === "emulated");
+      },
+      /** Stop a session's running turn and its sub-agents now (the 3 s Undo is the caller's, sedc 09 #1). */
+      stop: (sessionId) => api.abort(sessionId),
+      /** The coordinator session of a chat that is working now, if any. */
+      coordinatorBusy: (project) => {
+        const chat = chatIdOf(project);
+        const s = Object.values(state.sessions).find((x) => x.chat_id === chat && COORD.has(x.role) && !x.retired_at && BUSY.has(x.state));
+        return s ? s.id : null;
       },
       status: loadStatus,
       chatIdOf,
