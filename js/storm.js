@@ -49,8 +49,11 @@ export function stormSource(state, emit, event) {
   let held = [];                 // frames received while the first load runs
   let holding = true;
   let stream = null;
-  let statusT = null, runtimesT = null;
+  let statusT = null, runtimesT = null, recoverT = null;
   let chatsAt = 0, chatsBusy = null;
+  const watched = { projects: new Set(), thread: null }; // what's on screen, to reload after a reset
+  let firstFrame = null;
+  const sawFrame = new Promise((r) => { firstFrame = r; });
 
   const projectOf = (chatId) => (chatId ? chatProject.get(chatId) || null : null);
   const chatIdOf = (project) => state.projects.find((p) => p.id === project)?.chatId || null;
@@ -109,8 +112,9 @@ export function stormSource(state, emit, event) {
     }
     state.threads = next.sort((a, b) => b.lastAt - a.lastAt);
   }
-  let soonT = null;
+  let soonT = null, emitT = null;
   const soon = () => { clearTimeout(soonT); soonT = setTimeout(() => { commit(); emit(); }, 30); };
+  const emitSoon = () => { if (!emitT) emitT = setTimeout(() => { emitT = null; emit(); }, 40); };
 
   // ── loading ───────────────────────────────────────────────────────────────
   function setProjects(chats) {
@@ -137,18 +141,31 @@ export function stormSource(state, emit, event) {
       } catch (err) {
         state.error = err.message;
         state.errorCode = err.code;
+        scheduleRecover();
       }
       soon();
     })();
     try { return await chatsBusy; } finally { chatsBusy = null; }
   }
+  /** The first load failed (storm restarting, the server down): try again until it works. */
+  function scheduleRecover(ms = 8000) {
+    if (recoverT) return;
+    recoverT = setTimeout(async () => { recoverT = null; await recover(); }, ms);
+  }
+  async function recover() {
+    if (!state.error && state.projects.length) return;
+    await loadAll();
+    commit(); emit();
+  }
   const maybeChats = () => { if (Date.now() - chatsAt > CHATS_MIN_MS) loadChats(); };
   async function loadThreads(p) {
+    const asked = Date.now();
     try {
       const { threads } = await api.threads(p.chatId);
       const seen = new Set();
-      for (const r of threads || []) { seen.add(r.ts); rawThreads.set(r.ts, { ...(rawThreads.get(r.ts) || {}), ...r }); }
-      for (const [ts, r] of rawThreads) if (r.chat_id === p.chatId && !seen.has(ts)) rawThreads.delete(ts);
+      for (const r of threads || []) { seen.add(r.ts); rawThreads.set(r.ts, { ...(rawThreads.get(r.ts) || {}), ...r, _at: Date.now() }); }
+      // gone from the listing, unless a frame made it after the listing was read
+      for (const [ts, r] of rawThreads) if (r.chat_id === p.chatId && !seen.has(ts) && (r._at || 0) < asked) rawThreads.delete(ts);
     } catch { /* keep the last good threads for this project */ }
   }
   async function loadSessions() {
@@ -282,6 +299,8 @@ export function stormSource(state, emit, event) {
     const r = rawThreads.get(ts);
     if (!r) return;
     const th = state.threadHist[ts] || (state.threadHist[ts] = { loading: false, loaded: false, error: null });
+    // its turns may have been pruned while it was off screen: read them again
+    if (th.loaded && r.session_id && !state.turns.hasSession(r.session_id)) { loadTurns(r.session_id).then(soon); return; }
     if (th.loading || th.loaded) return;
     th.loading = true;
     soon();
@@ -309,6 +328,7 @@ export function stormSource(state, emit, event) {
 
   // ── the stream ────────────────────────────────────────────────────────────
   function onFrame(f) {
+    firstFrame();
     if (holding) { held.push(f); return; }
     apply(f);
   }
@@ -318,7 +338,7 @@ export function stormSource(state, emit, event) {
     const d = env.data || {};
     if (env.seq != null && env.seq > state.lastSeq) state.lastSeq = env.seq;
     const tid = state.turns.apply(f);
-    if (env.chat_id && !chatProject.has(env.chat_id)) maybeChats(); // a chat we don't know yet
+    if (type !== "chat" && env.chat_id && !chatProject.has(env.chat_id)) maybeChats(); // a chat we don't know yet (a creation says so itself)
     switch (type) {
       case "message": {
         const row = { ...d, seq: env.seq ?? d.seq ?? null };
@@ -335,10 +355,9 @@ export function stormSource(state, emit, event) {
         const aw = state.awaiting[project];
         const reply = row.author_kind !== "owner";
         const answered = !!(aw && reply && COORD.has(row.author_id));
-        if (answered) { delete state.awaiting[project]; delete state.failed[project]; }
+        if (answered) delete state.awaiting[project];
+        if (reply && COORD.has(row.author_id)) delete state.failed[project];
         if (reply) event({ kind: "message", project, text: String(row.text || "").slice(0, 160), answered, author: row.author_id });
-        // a project created outside this tab says so on the workspace timeline (R3)
-        if (row.author_kind === "system" && /^Project .+ created\.?$/.test(String(row.text || ""))) loadChats();
         emit();
         break;
       }
@@ -347,7 +366,7 @@ export function stormSource(state, emit, event) {
         if (!ts) break;
         const old = rawThreads.get(ts);
         if (!old && !d.chat_id) { refetchThread(env.chat_id, ts); break; }
-        rawThreads.set(ts, { ...(old || {}), ...d, chat_id: d.chat_id || (old && old.chat_id) || env.chat_id, updated_at: d.updated_at || env.ts || (old && old.updated_at) });
+        rawThreads.set(ts, { ...(old || {}), ...d, _at: Date.now(), chat_id: d.chat_id || (old && old.chat_id) || env.chat_id, updated_at: d.updated_at || env.ts || (old && old.updated_at) });
         soon();
         break;
       }
@@ -377,8 +396,11 @@ export function stormSource(state, emit, event) {
         if (!t) break;
         const project = projectOf(t.chat);
         const aw = project && state.awaiting[project];
-        const mine = aw && (t.wakes || []).includes(`msg:${aw.id}`);
-        if (mine && (d.status === "failed" || d.status === "interrupted")) {
+        const wake = aw && `msg:${aw.id}`;
+        const mine = aw && (t.wakes || []).includes(wake);
+        const requeued = (d.wakes_requeued || []).includes(wake);
+        // "interrupted" (a restart) puts the wake back: the coordinator still answers, so we keep waiting
+        if (mine && d.status === "failed" && !requeued) {
           state.failed[project] = { at: Date.now(), error: d.error || d.reason || d.stop_reason || "the turn failed", id: aw.id };
           delete state.awaiting[project];
           event({ kind: "coord_failed", project, text: state.failed[project].error });
@@ -388,6 +410,16 @@ export function stormSource(state, emit, event) {
       }
       case "hop": soon(); break;
       case "chat": {
+        // a creation carries `kind` (UI-reference §4.10): add it from the event, no re-listing
+        if (d.kind) {
+          if (!chatProject.has(d.id)) {
+            const id = d.kind === "workspace" ? "workspace" : d.project;
+            chatProject.set(d.id, id);
+            if (!state.projects.some((p) => p.chatId === d.id)) state.projects.push({ id, name: d.kind === "workspace" ? "Workspace" : d.project, kind: d.kind, chatId: d.id, routing: null, pin: { agent: null, model: null, effort: null }, hasChat: true });
+            soon();
+          }
+          break;
+        }
         if (d.retired_at) { loadChats(); break; }
         const p = state.projects.find((x) => x.chatId === d.id);
         if (p) { for (const k of ["routing", "agent", "model", "effort"]) if (k in d) { if (k === "routing") p.routing = d.routing; else p.pin = { ...(p.pin || {}), [k]: d[k] }; } }
@@ -419,7 +451,7 @@ export function stormSource(state, emit, event) {
         break;
       }
       default:
-        if (tid) soon(); // a block or turn frame: re-render what shows it
+        if (tid) emitSoon(); // a block or turn frame: re-render, no need to rebuild the threads
     }
   }
   const refetchBusy = new Set();
@@ -438,11 +470,13 @@ export function stormSource(state, emit, event) {
   }
 
   async function reload() {
-    // a reset for retention or a replaced store: start again from the server's state
-    rawThreads.clear();
+    // a reset for retention or a replaced store: start again from the server's state. The thread
+    // list is refreshed in place (no false "new thread" lines); what's on screen loads again.
     state.timeline = {}; state.hist = {}; state.threadMsgs = {}; state.threadHist = {};
     state.review.clear(); state.routed = {}; state.turns = createTurns();
     await loadAll();
+    await Promise.all([...watched.projects].map((p) => loadTimeline(p)));
+    if (watched.thread) await loadThread(watched.thread);
     commit(); emit();
   }
 
@@ -452,7 +486,7 @@ export function stormSource(state, emit, event) {
       onFrame,
       onState: (s, info) => {
         state.conn = s; state.connInfo = info;
-        if (s === "live" && state.loaded) loadStatus();
+        if (s === "live" && state.loaded) { loadStatus(); if (state.error || !state.projects.length) recover(); }
         emit();
       },
       onReset: async () => { await reload(); },
@@ -461,6 +495,9 @@ export function stormSource(state, emit, event) {
 
   async function boot() {
     startStream();
+    // the subscription is in place once its first frame (the snapshot) arrives; frames from then on
+    // are held during the load, so nothing that changes while it runs is lost or reverted
+    await Promise.race([sawFrame, new Promise((r) => setTimeout(r, 4000))]);
     await Promise.all([loadAll(), loadStatus()]);
     commit();
     holding = false;
@@ -470,6 +507,12 @@ export function stormSource(state, emit, event) {
     emit();
   }
   boot();
+  setInterval(() => {
+    const keep = new Set();
+    const t = watched.thread && rawThreads.get(watched.thread);
+    if (t && t.session_id) keep.add(t.session_id);
+    state.turns.prune(keep);
+  }, 60000);
   addEventListener("visibilitychange", () => {
     if (document.hidden) return;
     stream && stream.nudge();
@@ -547,8 +590,8 @@ export function stormSource(state, emit, event) {
       decide: () => Promise.reject(new Error("Deciding is wired in the review queue.")),
       refresh: async () => { await loadChats(); await mapLimit(state.projects.filter((p) => p.kind === "project"), LOAD_CAP, loadThreads); commit(); emit(); },
       /** The open conversations: load their timelines once; the stream keeps them current. */
-      watch: (projects) => { for (const p of projects || []) if (p) loadTimeline(p); },
-      watchThread: (ts) => { if (ts) loadThread(ts); },
+      watch: (projects) => { watched.projects = new Set((projects || []).filter(Boolean)); for (const p of watched.projects) loadTimeline(p); },
+      watchThread: (ts) => { watched.thread = ts || null; if (ts) loadThread(ts); },
       loadOlder,
       replying: (project) => {
         const aw = state.awaiting[project];

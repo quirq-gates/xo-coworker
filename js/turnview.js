@@ -23,7 +23,7 @@ const EXTRA = {
 };
 const icon = (k) => ICON[KIND_ICON[k]] || EXTRA[KIND_ICON[k]] || EXTRA.dot;
 const size = (n) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
-const secs = (ms) => (ms == null ? "" : ms < 60000 ? `${Math.max(1, Math.round(ms / 1000))}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
+const secs = (ms) => { if (ms == null || !Number.isFinite(ms)) return ""; const t = Math.max(1, Math.round(ms / 1000)); return t < 60 ? `${t}s` : `${Math.floor(t / 60)}m ${t % 60}s`; };
 
 function rowMark(r) {
   if (r.status === "running") return r.waiting ? `<i class="tb-m is-wait" title="Waiting for you"></i>` : `<i class="spin tb-spin" aria-hidden="true"></i>`;
@@ -39,7 +39,7 @@ function rowHtml(r, open) {
   const canOpen = !!(out || (r.kind === "command" && r.target));
   const head = `<span class="tb-ri">${icon(r.kind || "other")}</span><span class="tb-rl">${renderInline(r.line || "", true)}</span>` +
     (prog ? `<span class="tb-rp">${esc(prog)}</span>` : "") + rowMark(r);
-  const cls = `tb-row s-${r.status || "ok"}${r.waiting ? " is-waiting" : ""}${r.pending ? " is-pending" : ""}`;
+  const cls = `tb-row s-${esc(r.status || "ok")}${r.waiting ? " is-waiting" : ""}${r.pending ? " is-pending" : ""}`;
   if (!canOpen) return `<li class="${cls}"><div class="tb-rh">${head}</div></li>`;
   const key = `row:${r.call_id}`;
   const isOpen = !!open[key];
@@ -74,7 +74,7 @@ function blockHtml(b, open, live, now) {
       const mark = (s) => (s === "done" ? "✓" : s === "doing" ? "✱" : "○");
       return `<div class="tb tb-plan"><button type="button" class="tb-h" data-tb="${esc(b.id)}" aria-expanded="${!isOpen ? "false" : "true"}">` +
         `<span class="tb-hi">${ICON.list}</span><span class="tb-ht">${esc(b.header || "Plan")}</span><span class="tb-chev">${ICON.chevron}</span></button>` +
-        (isOpen || (live && !b.done) ? `<ol class="tb-plan-l">${items.map((i) => `<li class="ck ck-${i.state}"><span class="ck-m" aria-hidden="true">${mark(i.state)}</span><span>${renderInline(i.text || "", true)}</span></li>`).join("")}</ol>` : "") + `</div>`;
+        (isOpen || (live && !b.done) ? `<ol class="tb-plan-l">${items.map((i) => `<li class="ck ck-${esc(i.state)}"><span class="ck-m" aria-hidden="true">${mark(i.state)}</span><span>${renderInline(i.text || "", true)}</span></li>`).join("")}</ol>` : "") + `</div>`;
     }
     case "shared_files": {
       const files = b.files || [];

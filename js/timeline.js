@@ -190,8 +190,9 @@ const hhmm = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? "" : 
  */
 export function connLine(w) {
   if (!w) return null;
-  if (w.error || (w.statusError && !STORM_DOWN.has(w.statusCode)) || w.conn === "down") return { kind: "down", text: "Can't reach XO", sub: "retrying · what you see may be out of date" };
-  if (STORM_DOWN.has(w.statusCode)) return { kind: "down", text: "XO's chat engine isn't running", sub: "retrying · nothing you write is lost" };
+  // the engine down is said as such: the UI server answered, so it isn't the network
+  if (STORM_DOWN.has(w.statusCode) || STORM_DOWN.has(w.errorCode)) return { kind: "down", text: "XO's chat engine isn't running", sub: "retrying · nothing you write is lost" };
+  if (w.error || w.statusError || w.conn === "down") return { kind: "down", text: "Can't reach XO", sub: "retrying · what you see may be out of date" };
   const rts = w.runtimes || [];
   if (rts.length && rts.every((r) => !r.cli || r.cli.logged_in === false || r.error)) {
     const r = rts[0];
@@ -209,8 +210,8 @@ export function connLine(w) {
 /** Why sending is paused right now ("" when it isn't), for the composer. timeline: posting to a chat's timeline. */
 export function sendBlock(w, { timeline = true } = {}) {
   if (!w) return "";
-  if (w.error && !w.loaded) return "Can't reach XO right now";
-  if (STORM_DOWN.has(w.statusCode)) return "XO's chat engine isn't running";
+  if (STORM_DOWN.has(w.statusCode) || STORM_DOWN.has(w.errorCode)) return "XO's chat engine isn't running";
+  if (w.error && !(w.projects && w.projects.length)) return "Can't reach XO right now";
   if (!w.loaded) return "Connecting to XO…";
   const rts = w.runtimes || [];
   if (rts.length && rts.every((r) => !r.cli || r.cli.logged_in === false || r.error)) return `${cliName(rts[0].name)} isn't connected`;

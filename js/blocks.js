@@ -14,11 +14,17 @@
 
 const ENDED = new Set(["cold", "parked"]);
 
-/** A row patch onto a row: output_append is appended, output replaces, everything else replaces. */
+/**
+ * A row patch is the whole row (the server sends `_row_view` minus output), so it REPLACES the row:
+ * live-only keys (waiting, streams, progress, pending) must not outlive the state that had them.
+ * Only the command output carries over: `output_append` is appended to it, `output` replaces it.
+ */
 function patchRow(old, p) {
-  const row = { ...(old || {}), ...p };
+  const row = { ...p };
   delete row.output_append;
-  if (p.output_append != null) row.output = (old && old.output ? old.output : "") + p.output_append;
+  if (p.output != null) row.output = p.output;
+  else if (p.output_append != null) row.output = (old && old.output ? old.output : "") + p.output_append;
+  else if (old && old.output != null) row.output = old.output;
   return row;
 }
 
@@ -84,11 +90,13 @@ export function createTurns() {
         return t.id;
       }
       case "session": {
-        // rule 6: the session's process ended; its running turn is over
-        if (!ENDED.has(d.status) || !env.session_id) return null;
+        // rule 6: the session's process ended; its running turn is over. Only a turn older than this
+        // frame: history applied after live frames carries old "cold" rows that must not end a turn
+        // running now.
+        if (!ENDED.has(d.status) || !env.session_id || env.seq == null) return null;
         let changed = null;
         for (const t of turns.values()) {
-          if (t.session === env.session_id && t.status === "running") { t.status = "ended"; dropOpen(t); changed = t.id; }
+          if (t.session === env.session_id && t.status === "running" && (t.seq ?? Infinity) < env.seq) { t.status = "ended"; dropOpen(t); changed = t.id; }
         }
         return changed;
       }
@@ -183,6 +191,23 @@ export function createTurns() {
       for (const t of turns.values()) if (t.session === session && t.status === "running") return t;
       return null;
     },
+    /**
+     * Keep memory bounded: drop finished turns of sessions not in `keep`, beyond the newest `perSession`
+     * of each, and never more than `max` finished turns in all. Running turns always stay.
+     */
+    prune(keep = new Set(), { perSession = 2, max = 300 } = {}) {
+      const done = [...turns.values()].filter((t) => t.status !== "running").sort((a, b) => (b.lastSeq || 0) - (a.lastSeq || 0));
+      const seen = new Map();
+      let kept = 0;
+      for (const t of done) {
+        const n = (seen.get(t.session) || 0) + 1;
+        seen.set(t.session, n);
+        if ((keep.has(t.session) || n <= perSession) && kept < max) { kept++; continue; }
+        turns.delete(t.id);
+      }
+    },
+    /** Whether any turn of this session is held (for reloading its history after a prune). */
+    hasSession: (session) => [...turns.values()].some((t) => t.session === session),
     /** The turn that took a wake (e.g. `msg:<cmsg>` or `msg:prompt:<client_id>`). */
     byWake(wake) {
       for (const t of turns.values()) if (t.wakes.includes(wake)) return t;

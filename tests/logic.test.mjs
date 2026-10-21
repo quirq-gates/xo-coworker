@@ -150,6 +150,7 @@ t("the connection line and the send block are honest", () => {
   assert.equal(connLine({ ...ok, error: "x" }).kind, "down");
   assert.equal(connLine({ ...ok, conn: "down" }).kind, "down");
   assert.match(connLine({ ...ok, statusError: "x", statusCode: "engine_not_running" }).text, /engine isn't running/);
+  assert.match(connLine({ ...ok, error: "Storm isn't running yet.", errorCode: "engine_not_running" }).text, /engine isn't running/, "not blamed on the network");
   assert.match(connLine({ ...ok, runtimes: [{ name: "claude_code", cli: { logged_in: false } }] }).text, /Claude isn't connected/);
   assert.equal(sendBlock({ ...ok, runtimes: [{ name: "claude_code", cli: { logged_in: false } }] }), "Claude isn't connected");
   assert.match(connLine({ ...ok, router: { mode: "off" } }).text, /router is off/);

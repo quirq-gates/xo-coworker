@@ -339,3 +339,22 @@ In Live, the backend has no approve/deny route yet (R2). A thread waiting on you
 | On a decision: `a` allow · hold `Enter` (destructive) · `d` send back · `1–9` options · `r` reply · `e` Details · `t` make it a rule · `o` open the thread · `J` `K` next/previous · `L` later · `⇧A` allow all routine | |
 
 **Why.** The keyboard map is designed so supervisors who use this all day never need the mouse. Destructive asks are never one key: pressing `a` on one only shows the hint "Destructive asks are never one key: press and hold the button."
+
+---
+
+## 8. The old Space UI, absorbed (decided 2026-10-21)
+
+XO Space's old built-in UI is being retired; everything it does moves here, redesigned, not copied. The map of every
+page and where it goes is `docs/space-ui-absorption.md` (local). The owner approved:
+
+- **The sidebar gains three quiet entries: Chats, Activity, Inbox.** Chats is plain chat with one agent; Activity is what
+  agents did (sessions, trends, the activity feed, merged with storm's live sessions); Inbox is notifications nothing
+  waits on. "Projects" opens an overview (Map, Timeline, Tree, List). Settings holds everything Setup did.
+  **Why:** one home per idea, and nothing new competes with Home for the person's attention.
+- **Inbox stays separate from Needs you.** Its count is neutral ink, never amber, and it never pings. **Why:** Inbox
+  items are notifications nothing waits on; Needs you is decisions an agent is blocked on. Mixing them would teach the
+  person that amber can be ignored.
+- **The Map and the Timeline are ported fully, and built last.** Settings comes first, because restart, update,
+  connectors, secrets and jobs exist nowhere else.
+- **The bar** (owner): "make sure its all very human centric and amazing".
+

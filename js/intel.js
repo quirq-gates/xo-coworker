@@ -27,6 +27,7 @@ import * as K from "./keys.js";
 import { esc } from "./world.js";
 import { ICON, RM } from "./ui.js";
 import { coderHeaders } from "./api.js";
+import { cliName } from "./timeline.js";
 
 export const DEPTH = {
   1: { name: "Quick", pips: "·", effort: "low" },
@@ -122,7 +123,7 @@ export function createIntel({ world, PROJ, params, onChange, record }) {
       (i.st
         ? `<p class="iq-now">${scope}</p>` +
           (i.dm ? `<p class="iq-now">Decision model: <b>${esc(i.dm)}</b>.</p>` : "") +
-          (i.agent ? `<p class="iq-rl">Agent: ${esc(i.agent)}.</p>` : "")
+          (i.agent ? `<p class="iq-rl">Agent: ${esc(cliName(i.agent))}.</p>` : "")
         : `<p class="iq-now">Waiting for XO's status…</p>`) +
       `<footer class="iq-f"><span>Choosing a model here needs the backend's intelligence API (R6). Nothing is changed from this panel yet.</span></footer>`;
     place();

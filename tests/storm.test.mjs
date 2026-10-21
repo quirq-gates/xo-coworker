@@ -110,10 +110,41 @@ t("rule 2: rows patch by call id; output appends, output replaces", () => {
   let rows = T.blocksOf(T.get("tu"))[0].rows;
   assert.equal(rows[0].output, "a\nb\n");
   assert.equal(rows.length, 2);
-  T.apply(env("block.updated", { block_id: "g", type: "activity", rows: [{ call_id: "c1", output: "only this" }, { call_id: "p", kind: "create_file", line: "Writing `x.py` · 2 KB", status: "running", pending: undefined }] }));
+  T.apply(env("block.updated", { block_id: "g", type: "activity", rows: [{ call_id: "c1", output: "only this" }, { call_id: "p", kind: "create_file", line: "Writing `x.py` · 2 KB", status: "running" }] }));
   rows = T.blocksOf(T.get("tu"))[0].rows;
   assert.equal(rows[0].output, "only this");
   assert.equal(rows[1].kind, "create_file");
+  assert.equal(rows[1].pending, undefined, "a patch replaces the row: the pending view is gone");
+  // a row that waited on the person and then finished is no longer waiting
+  T.apply(env("block.updated", { block_id: "g", type: "activity", rows: [{ call_id: "c1", kind: "command", line: "ls", status: "running", waiting: true }] }));
+  T.apply(env("block.updated", { block_id: "g", type: "activity", rows: [{ call_id: "c1", kind: "command", line: "ls · done", status: "ok" }] }));
+  rows = T.blocksOf(T.get("tu"))[0].rows;
+  assert.deepEqual([rows[0].status, rows[0].waiting, rows[0].output], ["ok", undefined, "only this"]);
+});
+t("rule 6 never ends a running turn from older history (a thread opened mid-turn)", () => {
+  const T = createTurns();
+  const env = (type, data, seq, turn = "t2") => ({ type, envelope: { type, seq, turn_id: turn, session_id: "s", data } });
+  T.apply({ type: "snapshot", envelope: { type: "snapshot", data: { seq: 130, turns: [{ turn_id: "t2", session_id: "s", seq: 120, blocks: [{ id: "x", type: "text", index: null, text: "Patching" }] }] } } });
+  // then the session's stored history arrives: an old cold, an old turn, its end
+  T.apply({ type: "session", envelope: { type: "session", seq: 38, session_id: "s", data: { status: "cold", reason: "created" } } });
+  T.apply(env("turn.started", {}, 90, "t1"));
+  T.apply(env("turn.finished", { status: "finished" }, 99, "t1"));
+  T.apply({ type: "session", envelope: { type: "session", seq: 100, session_id: "s", data: { status: "cold", reason: "idle" } } });
+  T.apply(env("turn.started", {}, 120));
+  assert.equal(T.get("t2").status, "running");
+  T.apply(env("block.updated", { block_id: "x", type: "text", append: " the config" }));
+  assert.equal(T.blocksOf(T.get("t2"))[0].text, "Patching the config");
+});
+t("prune keeps running turns and the sessions on screen", () => {
+  const T = createTurns();
+  for (let i = 0; i < 10; i++) {
+    const s = i < 5 ? "a" : "b";
+    T.apply({ type: "turn.started", envelope: { type: "turn.started", seq: i * 2 + 1, turn_id: `t${i}`, session_id: s, data: {} } });
+    if (i !== 9) T.apply({ type: "turn.finished", envelope: { type: "turn.finished", seq: i * 2 + 2, turn_id: `t${i}`, session_id: s, data: { status: "finished" } } });
+  }
+  T.prune(new Set(["a"]), { perSession: 1 });
+  assert.equal(T.list((t) => t.session === "a").length, 5, "the open thread's session keeps every turn");
+  assert.deepEqual(T.list((t) => t.session === "b").map((t) => t.id), ["t8", "t9"], "others keep their newest finished turn and the running one");
 });
 t("rule 3 and 5: finished blocks stay; open ones drop at turn.finished", () => {
   const T = createTurns();
@@ -220,6 +251,35 @@ t("stream: storm unavailable (503) is reported with its code, then retried", asy
   await until(() => states.some(([, c]) => c === "engine_not_running"));
   s.close();
   assert.ok(states.some(([st, c]) => st === "reconnecting" && c === "engine_not_running"), JSON.stringify(states));
+});
+
+t("stream: nudge never opens a second connection; close stops delivery", async () => {
+  let opened = 0;
+  const gates = [];
+  const fetchImpl = (url, opts) => {
+    opened++;
+    return new Promise((resolve, reject) => {
+      opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+      gates.push(() => {
+        const enc = new TextEncoder();
+        const chunks = [sse(null, "snapshot", { seq: 41, turns: [] }), sse(null, "heartbeat", {})];
+        resolve({ ok: true, status: 200, type: "basic", body: { getReader: () => ({ cancel() {}, read: async () => (chunks.length ? { value: enc.encode(chunks.shift()), done: false } : new Promise(() => {})) }) } });
+      });
+    });
+  };
+  const got = [];
+  const s = new SSEStream("u", { fetchImpl, onFrame: (f) => got.push(f.type) }).start();
+  s.nudge(); s.nudge(); // a connect is in flight: nothing new
+  await until(() => opened >= 1);
+  assert.equal(opened, 1);
+  gates[0]();
+  await until(() => got.length >= 2);
+  assert.deepEqual(got, ["snapshot", "heartbeat"]);
+  assert.equal(s.lastId, "41", "the snapshot's seq is the resume point until a stored frame has an id");
+  s.close();
+  const n = got.length;
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(got.length, n);
 });
 
 for (const run of pending) await run();
