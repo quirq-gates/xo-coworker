@@ -19,7 +19,8 @@ import * as K from "./keys.js";
 import { EFFORT, effortOf, rank, evidenceFor, leverageOf, suggestFor, whyLine, estLine } from "./content.js";
 import { ICON, $, RM, clock, sound, dial, wait, morph, expand } from "./ui.js";
 import { renderMarkdown, renderInline } from "./markdown.js";
-import { itemParts, itemBody, questionsOf, evidenceOf, itemEffort, isNo, VERB } from "./review.js";
+import { itemParts, itemBody, questionsOf, evidenceOf, itemEffort, isNo, VERB, holdWords as holdWordsOf } from "./review.js";
+import { clientId as newKey } from "./api.js";
 
 export const riskLabel = (r) => ({ destructive: "Destructive", notable: "Notable", routine: "Routine", stopped: "Stopped" })[r] || "Notable";
 const BIG_CHECK = `<svg viewBox="0 0 52 52" aria-hidden="true"><circle class="sc" cx="26" cy="26" r="23"/><path class="sk" d="M15 27l7.5 7.5L38 19"/></svg>`;
@@ -29,7 +30,7 @@ const MARK = (s) => (s === "done" ? "✓" : s === "doing" ? "✱" : "○");
 const cap = (s) => { const t = String(s || ""); return /^[a-z]+ /.test(t) ? t.charAt(0).toUpperCase() + t.slice(1) : t; };
 const ord = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
 
-export function createDecisions({ world, P, rules, PROJ, announce, render, later, waitSince, absorbing, onOpenThread, onAllClear, onUndone, onBreak, onSent }) {
+export function createDecisions({ world, P, rules, PROJ, announce, render, later, waitSince, absorbing, onOpenThread, onAllClear, onUndone, onBreak, onSent, onNotSent }) {
   const panel = $("#panel"), stage = $("#pn-stage");
   const firstSeen = new Map();
   let seq = 0;
@@ -37,7 +38,13 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   const stoppedDone = new Set();
   const log = [];
   const teach = new Map();
+  const noSecret = new Set(); // items XO wouldn't carry a secret answer to (secret_needs_a_call)
   let logN = 0, cardN = 0;
+  /** The Allow button's words: the item's own label, or the reach chosen (its sentence shows below). */
+  const scopeWords = (P, id) => {
+    const o = id && P.scopes.find((x) => x.id === id);
+    return !o ? (P.primary ? P.primary.label : "Allow") : o.scope === "thread" ? "Allow for this thread" : "Allow + rule";
+  };
 
   // ── the needs-you list: every ask, with effort, leverage, idleness, suggestion ──
   function needItems() {
@@ -49,6 +56,13 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
         const key = `stop|${t.id}`;
         if (stoppedDone.has(t.id) || queue.has(key)) continue;
         out.push({ key, t, ask: { kind: "stopped", title: t.title, detail: String(t.happened || "").replace(/^Stopped:\s*/i, "Stopped: "), risk: "stopped" }, group: "stopped", risk: "stopped" });
+        // its open review items (an integrity report, a schedule to approve) still need their own answer
+        for (const a of Kit.asksOf(t)) {
+          if (!a.item) continue;
+          const k = Kit.askKey(t, a);
+          if (queue.has(k) || sentKeys.has(k) || absorbing.has(k)) continue;
+          out.push({ key: k, t, ask: a, group: Kit.groupOf(t, a), risk: Kit.riskOf(a) });
+        }
         continue;
       }
       // a finished thread can still hold an open item (an integrity report arrives after its turn)
@@ -76,6 +90,32 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     return rank(out);
   }
 
+  /** A title as a sentence: one full stop, never "token?." */
+  const stop = (t) => { t = String(t || "").trim(); return /[.?!…]$/.test(t) ? t : `${t}.`; };
+  /** Why a decision wasn't sent: the item had already left the list (decided, withdrawn, expired). */
+  function goneWhy(err) {
+    const d = err.item && err.item.decision && err.item.decision.decision;
+    if (err.gone === "already_decided" || err.gone === "decided") return `It was already decided elsewhere${d && VERB[d] ? ` (${VERB[d].toLowerCase()})` : ""}.`;
+    if (err.gone === "withdrawn") return "It was withdrawn before your answer arrived.";
+    if (err.gone === "expired") return "It had expired, and the agent was told.";
+    return "It's no longer waiting for you.";
+  }
+  /** The same, short, for the herald. */
+  function failShort(err) {
+    if (err && err.code === "secret_needs_a_call") return "XO can't carry a secret here. Reply in the thread.";
+    if (err && err.code === "rule_sentence_mismatch") return "The rule's wording changed. It's back in your list.";
+    if (err && err.status >= 400 && err.status < 500 && err.message) return `${stop(err.message)} It's back in your list.`;
+    return "It didn't reach the agent. It's back in your list.";
+  }
+  /** A decision XO refused: the server's reason, and whether it can simply be tried again. */
+  function failLine(part, err) {
+    const t = stop(part.ask.title);
+    if (err && err.code === "secret_needs_a_call") return `Not sent: ${t} XO can't pass a secret to this question; give it to the agent another way, with a reply in the thread.`;
+    if (err && err.code === "rule_sentence_mismatch") return `Not sent: ${t} The rule's wording has changed; read it again and decide. It's back in your list.`;
+    if (err && err.status >= 400 && err.status < 500 && err.message) return `Not sent: ${t} ${stop(err.message)} It's back in your list.`;
+    return `Didn't reach the agent: ${t} It's back in your list.`;
+  }
+
   // ── commit window (3 s, Undo) ─────────────────────────────────────────────
   const queue = Kit.createCommitQueue({
     exec: (p) => Promise.resolve(p.stopped ? world.act.reply(p.t.id, p.choice.text) : p.choice && p.choice.storm ? world.act.decideItem(p.ask.item.id, p.choice.body) : Kit.answer(world, p.t, p.ask, p.choice, p.note)).then(() => {
@@ -97,12 +137,25 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
       }
       if (type === "sending") for (const p of item.parts) p.entry.status = "sending";
       if (type === "settled") {
-        for (const { part, ok } of results) {
+        for (const { part, ok, err } of results) {
           if (ok) {
             part.entry.status = "sent";
             if (part.stopped) stoppedDone.add(part.t.id); else sentKeys.set(part.key, Date.now());
             onSent && onSent(part);
-          } else { part.entry.status = "failed"; F.status.delete(part.key); announce(`Didn't reach the agent: ${part.ask.title}. It's back in your list.`); }
+          } else if (err && err.gone) {
+            // refused because the item had already left: never counted as made (UI-reference §4.3 #7)
+            part.entry.status = "gone";
+            part.entry.why = goneWhy(err);
+            sentKeys.set(part.key, Date.now());
+            announce(`Not sent: ${stop(part.ask.title)} ${part.entry.why}`);
+            onNotSent && onNotSent(part.ask.title, part.entry.why);
+          } else {
+            part.entry.status = "failed";
+            F.status.delete(part.key);
+            if (err && err.code === "secret_needs_a_call" && part.ask.item) noSecret.add(part.ask.item.id);
+            announce(failLine(part, err));
+            onNotSent && onNotSent(part.ask.title, failShort(err));
+          }
         }
       }
       toastRender();
@@ -114,7 +167,9 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   const F = { open: false, order: [], items: new Map(), status: new Map(), cur: null, done: false, hold: null, mode: "all", returnTo: null, swap: 0, open0: {}, vig: false };
   const api = {
     needItems,
-    decisions: () => log.filter((d) => d.status !== "failed"),
+    decisions: () => log.filter((d) => d.status !== "failed" && d.status !== "gone"),
+    /** Decisions XO refused because the item had already left, with why (for the conversation). */
+    notSent: () => log.filter((d) => d.status === "gone"),
     isOpen: () => F.open,
     current: () => (F.open && !F.done && !F.vig ? F.cur : null),
     open, close, sync, undo, decide, decideNow, laterNow, bringIn,
@@ -214,6 +269,8 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   // ── deciding ──────────────────────────────────────────────────────────────
   function decide(n, choice, note = "", { secs = null } = {}) {
     note = String(note || "").trim();
+    // one decision per ask: a second press (a double-click, a key during the card's exit) does nothing
+    if (queue.has(n.key) || sentKeys.has(n.key) || (F.open && /^(allow|back)$/.test(F.status.get(n.key) || ""))) return null;
     if (n.ask.item) return decideItem(n, choice, note, secs);
     let taught = false, scope = null;
     if (choice === "allow" && teach.get(n.key)) {
@@ -247,6 +304,8 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (choice === "allow" && teach.get(n.key)) choice = { scope: P.scopes.find((o) => o.id === teach.get(n.key)) };
     let body;
     try { body = itemBody(it, choice, note); } catch (err) { announce(err.message); return null; }
+    // one key per decision, so a resend of this same decision is the same request
+    body.idempotency_key = newKey();
     const no = isNo(body);
     const opt = body.scope === "thread" ? P.scopes.find((o) => o.scope === "thread") : body.option ? P.scopes.find((o) => o.id === body.option) : null;
     const said = typeof choice === "object" && choice ? (choice.option || choice.text || choice.name || (choice.answers ? "your answers" : "") || (opt ? opt.label : "")) : "";
@@ -268,8 +327,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     const n = needItems().find((x) => x.key === key);
     if (!n) return false;
     if (n.risk === "destructive" && choice === "allow") return false; // only ever via the hold
-    decide(n, choice, note);
-    return true;
+    return !!decide(n, choice, note);
   }
   function laterNow(key) { later.add(key); announce("Planned for later today. It won't come up as your next move until then."); render(); }
   function bringIn(key) { P.bringIn(key); announce("Brought in. It's in today's list now."); render(); }
@@ -358,23 +416,37 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   }
 
   /** A storm item's answers, all from its own options (labels, scopes, sentences, hold). */
+  /** The hold button for an item's "yes" (its words from the server's label). */
+  const holdBtn = (it, P) => {
+    const words = holdWordsOf(P.primary);
+    return `<button type="button" class="b b-hold" data-act="hold" title="Press and hold for 1.2 s (hold Enter)" aria-label="${esc(words)}: ${esc(it.title)}. Press and hold for 1.2 seconds."><span class="hold-fill" aria-hidden="true"></span><span class="b-l"><span class="hold-ic">${ICON.lock}</span><span class="hold-txt" data-label="${esc(words)}">${esc(words)}</span></span></button>`;
+  };
+
   function itemActsHtml(n, id) {
     const it = n.ask.item, P = itemParts(it), qs = questionsOf(it);
     const scope = teach.get(n.key);
     let act = "";
+    if (it.kind === "question" && noSecret.has(it.id) && qs.some((q) => q.secret)) {
+      // XO refused to carry a secret to this question (secret_needs_a_call): it can't be answered here
+      return `<p class="c-iwhy">${ICON.lock}<span>XO can't pass a secret to this question. Give it to the agent another way: a reply in the thread replaces this question.</span></p>` +
+        `<div class="c-btns one"><button type="button" class="b b-reply" data-act="thread"><span class="b-l">${ICON.edit}Reply in the thread</span></button></div>`;
+    }
     if (it.kind === "question") {
-      const one = qs.length === 1 && !qs[0].multi && !qs[0].secret && qs[0].options.length;
+      // one plain choice is one press, unless it's destructive: then it's picked, then held
+      const one = qs.length === 1 && !qs[0].multi && !qs[0].secret && qs[0].options.length && !P.hold;
       if (one) {
         act += `<div class="c-opts n${Math.min(qs[0].options.length, 3)}" role="group" aria-label="Answers">${qs[0].options.map((o, i) => `<button type="button" class="b b-opt" data-iopt="${i}" title="Answer “${esc(o.label)}” (${i + 1})"><span class="o-l">${esc(o.label)}</span>${o.description ? `<span class="o-d">${esc(o.description)}</span>` : ""}</button>`).join("")}</div>`;
         act += `<div class="c-btns one"><button type="button" class="b b-reply" data-act="reply" title="Answer in your words${K.hint("reply")}"><span class="b-l">${ICON.edit}Answer in words</span></button></div>`;
       } else {
         act += `<form class="c-qs" data-qform novalidate>${qs.map((q, qi) => {
           const name = `q${id}-${qi}`;
-          const head = `<legend>${esc(q.header || q.question)}</legend>${q.header && q.question ? `<p class="c-q-q">${esc(q.question)}</p>` : ""}`;
+          // a lone question that is the card's own title isn't said twice (its label stays for screen readers)
+          const same = qs.length === 1 && !q.header && q.question === it.title;
+          const head = same ? `<legend class="sr-only">${esc(q.question)}</legend>` : `<legend>${esc(q.header || q.question)}</legend>${q.header && q.question ? `<p class="c-q-q">${esc(q.question)}</p>` : ""}`;
           if (q.secret) return `<fieldset class="c-q">${head}<input type="password" class="c-q-in" name="${name}" data-qid="${esc(q.id)}" autocomplete="off" aria-label="${esc(q.question)}"><p class="c-q-s">Goes to the agent only; XO keeps it as [secret].</p></fieldset>`;
           if (!q.options.length) return `<fieldset class="c-q">${head}<input class="c-q-in" name="${name}" data-qid="${esc(q.id)}" autocomplete="off" aria-label="${esc(q.question)}"></fieldset>`;
           return `<fieldset class="c-q">${head}<div class="c-q-opts">${q.options.map((o) => `<label class="c-q-o"><input type="${q.multi ? "checkbox" : "radio"}" name="${name}" data-qid="${esc(q.id)}" value="${esc(o.label)}"><span><b>${esc(o.label)}</b>${o.description ? `<em>${esc(o.description)}</em>` : ""}</span></label>`).join("")}</div></fieldset>`;
-        }).join("")}<div class="c-btns one"><button type="submit" class="b b-allow"><span class="b-l">${ICON.check}Send ${qs.length > 1 ? "answers" : "answer"}</span></button></div></form>`;
+        }).join("")}<div class="c-btns one">${P.hold ? holdBtn(it, P) : `<button type="submit" class="b b-allow"><span class="b-l">${ICON.check}Send ${qs.length > 1 ? "answers" : "answer"}</span></button>`}</div></form>`;
       }
       return act;
     }
@@ -382,11 +454,8 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
       act += `<label class="c-name"><span>Project name</span><input class="c-name-in" data-name value="${esc((it.detail && it.detail.name) || "")}" maxlength="80" autocomplete="off"></label>`;
     }
     const label = (o, fallback) => esc((o && o.label) || fallback);
-    // the hold's words: "Hold to allow" for a destructive allow, else "Hold to" + the server's label
-    const holdWords = P.primary && P.primary.decision === "allow" ? "Hold to allow" : `Hold to ${String((P.primary && P.primary.label) || "confirm").replace(/^\w/, (c) => c.toLowerCase())}`;
-    const primary = !P.primary ? "" : P.hold
-      ? `<button type="button" class="b b-hold" data-act="hold" title="Press and hold for 1.2 s (hold Enter)" aria-label="${esc(holdWords)}: ${esc(it.title)}. Press and hold for 1.2 seconds."><span class="hold-fill" aria-hidden="true"></span><span class="b-l"><span class="hold-ic">${ICON.lock}</span><span class="hold-txt" data-label="${esc(holdWords)}">${esc(holdWords)}</span></span></button>`
-      : `<button type="button" class="b b-allow${n.risk === "notable" ? " arming" : ""}" data-act="allow" title="${label(P.primary)}${K.hint("allow")}" aria-keyshortcuts="${K.label("allow")}"><span class="b-l">${ICON.check}<span class="al-t">${scope ? label(P.scopes.find((o) => o.id === scope), "Allow") : label(P.primary)}</span></span></button>`;
+    const primary = !P.primary ? "" : P.hold ? holdBtn(it, P)
+      : `<button type="button" class="b b-allow${n.risk === "notable" ? " arming" : ""}" data-act="allow" title="${label(P.primary)}${K.hint("allow")}" aria-keyshortcuts="${K.label("allow")}"><span class="b-l">${ICON.check}<span class="al-t">${esc(scopeWords(P, scope))}</span></span></button>`;
     const back = !P.back ? "" : `<button type="button" class="b b-back" data-act="${P.back.note ? "back" : "back-now"}" title="${label(P.back)}${K.hint("back")}" aria-keyshortcuts="${K.label("back")}"><span class="b-l">${ICON.rewind}${label(P.back)}</span></button>`;
     act += `<div class="c-btns${primary && back ? "" : " one"}">${primary}${back}</div>`;
     if (P.why) act += `<p class="c-iwhy">${ICON.lock}<span>${esc(P.why)}</span></p>`;
@@ -417,8 +486,11 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
 
     let act = "";
     const storm = !!a.item;
-    if (storm) act += itemActsHtml(n, id);
-    else {
+    if (storm) {
+      act += itemActsHtml(n, id);
+      // a big one can wait for a calmer moment, like any other card
+      if (destructive || n.effort === "think") act += `<div class="c-low"><button type="button" class="b-later" data-act="later" title="Plan for later today${K.hint("later")}">${ICON.clock}Later today</button>${destructive ? `<span class="c-low-t">or skip to the easier ones</span>` : ""}</div>`;
+    } else {
     if (opts) act += `<div class="c-opts n${Math.min(opts.length, 3)}" role="group" aria-label="Answers">${opts.map((o, i) => optHtml(o, i, ev)).join("")}</div>`;
     let primary;
     if (destructive) primary = `<button type="button" class="b b-hold" data-act="hold" title="Press and hold for 1.2 s (hold Enter)" aria-label="Hold to allow: ${esc(a.title)}. Press and hold for 1.2 seconds."><span class="hold-fill" aria-hidden="true"></span><span class="b-l"><span class="hold-ic">${ICON.lock}</span><span class="hold-txt">Hold to allow</span></span></button>`;
@@ -526,13 +598,16 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     const shownAt = performance.now();
     const ready = () => performance.now() - shownAt >= Kit.READ_MS;
     const secs = () => Math.max(2, Math.round((performance.now() - shownAt) / 1000));
+    // decide, then move on: only when a decision was queued (a repeat press or a refused choice stays put)
+    const go = (choice, how, note = "") => { const entry = decide(n, choice, note, { secs: secs() }); if (entry) ctx.after(how); return entry; };
     let noteMode = null;
     const body = frame;
     const step = ctx.onStep || null;
     const openNote = (mode) => {
       noteMode = mode;
       q(".c-note-l").textContent = mode === "reply" ? (n.group === "stopped" ? "What should it try?" : "Your answer, in your words") : "What should it do instead? (optional)";
-      q('[data-act="note-send"]').innerHTML = mode === "reply" ? "Send" : `${ICON.rewind}Send back`;
+      const no = n.ask.item ? itemParts(n.ask.item).back : null;
+      q('[data-act="note-send"]').innerHTML = mode === "reply" ? "Send" : `${ICON.rewind}${esc((no && no.label) || "Send back")}`;
       noteIn.placeholder = mode === "reply" ? (n.group === "stopped" ? "e.g. use the read replica for this step" : "Type your answer") : "e.g. what it should try instead";
       morph(body, () => { note.hidden = false; el.classList.add("noting"); }, { duration: 280, fade: note });
       if (step) step();
@@ -541,8 +616,8 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     const closeNote = () => { morph(body, () => { note.hidden = true; noteMode = null; el.classList.remove("noting"); }, { duration: 260 }); frame.focus({ preventScroll: true }); };
     const sendNote = () => {
       const v = noteIn.value.trim();
-      if (noteMode === "reply") { if (!v) { noteIn.focus(); return; } decide(n, { text: v }, "", { secs: secs() }); ctx.after("allow"); }
-      else { decide(n, "deny", v, { secs: secs() }); ctx.after("back"); }
+      if (noteMode === "reply") { if (!v) { noteIn.focus(); return; } go({ text: v }, "allow"); }
+      else { go("deny", "back", v); }
     };
     noteIn.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); e.stopPropagation(); sendNote(); }
@@ -552,29 +627,28 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
 
     const tryAllow = () => {
       if (n.risk === "destructive") { hint(el, "Destructive asks are never one key: press and hold the button."); return; }
-      if (n.group === "stopped") { decide(n, { text: "Please try again from the failing step." }, "", { secs: secs() }); ctx.after("allow"); return; }
+      if (n.group === "stopped") { go({ text: "Please try again from the failing step." }, "allow"); return; }
       if (n.ask.item) {
         if (n.ask.item.kind === "question") { hint(el, "Pick an answer, or answer in words."); return; }
         if (n.risk === "notable" && !ready()) { hint(el, "A beat to read it first."); return; }
         if (itemParts(n.ask.item).hold) { hint(el, "This one needs a press and hold."); return; }
         el.querySelector('[data-act="allow"]')?.classList.add("pressed");
         const nameIn = el.querySelector("[data-name]");
-        decide(n, nameIn ? { name: nameIn.value } : "allow", "", { secs: secs() });
-        ctx.after("allow");
+        go(nameIn ? { name: nameIn.value } : "allow", "allow");
         return;
       }
       if (!Kit.isBinary(n.ask)) { hint(el, "Pick an answer, reply in words, or send it back."); return; }
       if (n.risk === "notable" && !ready()) { hint(el, "A beat to read it first."); return; }
       el.querySelector('[data-act="allow"]')?.classList.add("pressed");
-      decide(n, "allow", "", { secs: secs() });
-      ctx.after("allow");
+      go("allow", "allow");
     };
     frame._allow = tryAllow;
+    frame._hint = (text) => hint(el, text);
     frame._n = n;
 
     const qform = el.querySelector("[data-qform]");
-    if (qform) qform.addEventListener("submit", (e) => {
-      e.preventDefault();
+    /** The form's answers as a choice, or null (and, unless quiet, says what's missing). */
+    const formChoice = (quiet = false) => {
       const qs = questionsOf(n.ask.item);
       const answers = {};
       for (const q of qs) {
@@ -582,30 +656,35 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
         let v;
         if (q.options.length && !q.secret) { const on = ins.filter((x) => x.checked).map((x) => x.value); v = q.multi ? on : on[0]; }
         else v = (ins[0] && ins[0].value.trim()) || "";
-        if (!v || (Array.isArray(v) && !v.length)) { hint(el, "Answer every question first."); (ins[0] || qform).focus(); return; }
+        if (!v || (Array.isArray(v) && !v.length)) { if (!quiet) { hint(el, "Answer every question first."); (ins[0] || qform).focus(); } return null; }
         answers[q.id] = v;
       }
-      decide(n, qs.length === 1 && !qs[0].multi && !qs[0].secret && !qs[0].options.length ? { text: answers[qs[0].id] } : qs.length === 1 && !qs[0].multi && !qs[0].secret ? { option: answers[qs[0].id] } : { answers }, "", { secs: secs() });
-      ctx.after("allow");
+      return qs.length === 1 && !qs[0].multi && !qs[0].secret && !qs[0].options.length ? { text: answers[qs[0].id] } : qs.length === 1 && !qs[0].multi && !qs[0].secret ? { option: answers[qs[0].id] } : { answers };
+    };
+    if (qform) qform.addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (qform.querySelector('[data-act="hold"]')) { hint(el, "This one needs a press and hold."); return; }
+      const c = formChoice();
+      if (c) go(c, "allow");
     });
     el.addEventListener("click", (e) => {
       const io = e.target.closest("[data-iopt]");
-      if (io) { io.classList.add("pressed"); decide(n, { option: questionsOf(n.ask.item)[0].options[+io.dataset.iopt].label }, "", { secs: secs() }); ctx.after("allow"); return; }
+      if (io) { io.classList.add("pressed"); go({ option: questionsOf(n.ask.item)[0].options[+io.dataset.iopt].label }, "allow"); return; }
       const isc = e.target.closest("[data-iscope]");
       if (isc) { teach.set(n.key, isc.dataset.iscope); paintItemScope(); return; }
       const b = e.target.closest("[data-act],[data-opt],[data-scope],.dis-h");
       if (!b) return;
       if (b.classList.contains("dis-h")) { toggleDis(el, b.parentElement.dataset.dis, n, step); return; }
-      if (b.dataset.opt != null) { b.classList.add("pressed"); decide(n, { option: n.ask.options[+b.dataset.opt] }, "", { secs: secs() }); ctx.after("allow"); return; }
+      if (b.dataset.opt != null) { b.classList.add("pressed"); go({ option: n.ask.options[+b.dataset.opt] }, "allow"); return; }
       if (b.dataset.scope) { teach.set(n.key, b.dataset.scope); paintTeach(); return; }
       const act = b.dataset.act;
       if (act === "allow") tryAllow();
       else if (act === "back") openNote("back");
-      else if (act === "back-now") { decide(n, "deny", "", { secs: secs() }); ctx.after("back"); }
+      else if (act === "back-now") { go("deny", "back"); }
       else if (act === "reply" || act === "note-reply") openNote("reply");
       else if (act === "note-send") sendNote();
       else if (act === "note-cancel") closeNote();
-      else if (act === "retry") { decide(n, { text: "Please try again from the failing step." }, "", { secs: secs() }); ctx.after("allow"); }
+      else if (act === "retry") { go({ text: "Please try again from the failing step." }, "allow"); }
       else if (act === "thread") onOpenThread && onOpenThread(n.t.id, ctx.surface);
       else if (act === "teach") toggleTeach();
       else if (act === "later") { if (ctx.surface === "panel") setLater(); else { laterNow(n.key); ctx.after("later"); } }
@@ -637,7 +716,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
       const qq = q(".teach-q");
       if (qq && cur) { qq.querySelector("span").textContent = cur.scope === "rule" ? "Added to your rules, word for word:" : "For this thread only:"; qq.querySelector("q").textContent = cur.sentence || cur.label; }
       const al = q('[data-act="allow"] .al-t');
-      if (al) al.textContent = id && cur ? cur.label : (P.primary ? P.primary.label : "Allow");
+      if (al) al.textContent = scopeWords(P, id);
     };
     const toggleTeach = () => {
       if (!q('[data-act="teach"]')) return;
@@ -652,7 +731,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (hold) {
       const fill = hold.querySelector(".hold-fill");
       holder = Kit.holdToConfirm(hold, {
-        ready: () => (ready() ? true : "Read it first: the hold starts after a moment."),
+        ready: () => (!ready() ? "Read it first: the hold starts after a moment." : qform && !formChoice(true) ? "Answer every question first." : true),
         onProgress: (p) => {
           fill.style.transition = "none";
           fill.style.transform = `scaleX(${Math.pow(p, 1.7)})`;
@@ -663,9 +742,11 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
         onConfirm: () => {
           hold.classList.remove("tense");
           hold.classList.add("locked");
-          hold.querySelector(".hold-txt").textContent = hold.querySelector(".hold-txt").dataset.label ? "Done" : "Allowed";
+          hold.querySelector(".hold-txt").textContent = n.ask.item ? (VERB[(itemParts(n.ask.item).primary || {}).decision] || "Done") : "Allowed";
           sound.play("lock");
-          setTimeout(() => { decide(n, "allow", "", { secs: secs() }); ctx.after("allow"); }, RM.matches ? 0 : 220);
+          const nameIn = el.querySelector("[data-name]");
+          const c = qform ? formChoice() : nameIn ? { name: nameIn.value } : "allow";
+          setTimeout(() => { if (c) go(c, "allow"); }, RM.matches ? 0 : 220);
         },
         onRefuse: (why) => { hint(el, why); hold.classList.remove("nope"); void hold.offsetWidth; hold.classList.add("nope"); },
         onRelease: () => {
@@ -836,13 +917,33 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (!n) return false;
     const k = e.key;
     const own = () => { e.preventDefault(); e.stopPropagation(); };
+    // after a refused key (someone starting to type where no text box opened), the card's letter
+    // keys stay quiet while the typing goes on, so words never land as a decision
+    if (card._quietUntil > performance.now() && k.length === 1) { own(); card._quietUntil = performance.now() + 700; return true; }
+    const refuse = (text) => { card._hint(text); card._quietUntil = performance.now() + 1500; };
+    const it = n.ask.item;
     if (K.is(e, "allow")) { own(); card._allow(); }
-    else if (K.is(e, "back")) { own(); if (n.group === "stopped" || n.ask.replyOnly) card._openNote("reply"); else card._openNote("back"); }
-    else if (K.is(e, "reply")) { if (!Kit.isBinary(n.ask)) { own(); card._openNote("reply"); } }
+    else if (K.is(e, "back")) {
+      own();
+      // a storm item says "no" only through its own "no" option (Deny, Send back, Can't, Wait…)
+      if (it) { const b = card.querySelector('[data-act="back"], [data-act="back-now"]'); if (b) b.click(); else refuse("This one has no way to say no."); }
+      else if (n.group === "stopped" || n.ask.replyOnly) card._openNote("reply"); else card._openNote("back");
+    }
+    else if (K.is(e, "reply")) {
+      // words answer only a question; anything else is answered with its buttons
+      if (it ? it.kind === "question" && card.querySelector('[data-act="reply"]') : !Kit.isBinary(n.ask)) { own(); card._openNote("reply"); }
+      else if (it) { own(); const P = itemParts(it); refuse(`This one is answered with its buttons${P.primary ? `: ${[P.primary.label, P.back && P.back.label].filter(Boolean).join(" or ")}` : ""}.`); }
+    }
     else if (K.is(e, "details")) { own(); card._dis("ev"); }
     else if (K.is(e, "rule")) { own(); card._teach(); }
     else if (K.is(e, "undo")) { own(); undo(); }
     else if (inPanel && K.is(e, "open")) { own(); onOpenThread && onOpenThread(n.t.id, "panel"); }
+    else if (/^[1-9]$/.test(k) && it && it.kind === "question") {
+      // a storm question: the k-th answer button, or (in a form) the k-th choice of a lone question
+      const b = card.querySelector(`[data-iopt="${+k - 1}"]`);
+      const r = !b && card.querySelectorAll("[data-qform] .c-q").length === 1 ? card.querySelectorAll("[data-qform] .c-q-o input")[+k - 1] : null;
+      if (b) { own(); b.click(); } else if (r) { own(); r.checked = r.type === "checkbox" ? !r.checked : true; r.focus(); } else return false;
+    }
     else if (/^[1-9]$/.test(k) && Array.isArray(n.ask.options) && !Kit.isBinary(n.ask)) {
       const o = n.ask.options[+k - 1];
       if (o != null) { own(); card.querySelector(`[data-opt="${+k - 1}"]`)?.click(); }

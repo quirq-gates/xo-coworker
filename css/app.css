@@ -590,7 +590,7 @@ button.hr:active{transform:scale(.97)}
 .hr-go svg{width:13px;height:13px}
 .hr-calm{box-shadow:none;background:transparent;border-color:var(--g20)}
 .hr-calm .hr-t{color:var(--ink-3)}
-.hr-ev .hr-t{color:var(--ink)}
+.hr-ev .hr-t{flex:none;color:var(--ink)}
 .hr-ev .hr-ic .tk{animation-delay:.12s}
 .hr-ev.k-stopped{border-color:rgb(230 131 136 / .3)}
 .hr-ev.k-ping{border-color:rgba(var(--accent-rgb),.28)}
@@ -1456,9 +1456,11 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .route-row>svg{flex:none;width:12px;height:12px;color:var(--ink-4)}
 .m-card .tcard{margin-top:0}
 .m-note{margin:10px 0 26px;color:var(--ink-4);font-size:var(--fs-sm);text-align:center}
+.day.hist{min-height:26px}
 .day.hist span{display:inline-flex;align-items:center;gap:8px}
 .hist-more{height:26px;padding:0 12px;border-radius:999px;border:1px solid var(--g25);color:var(--ink-3);font-size:var(--fs-sm);transition:color var(--dur-fast),border-color var(--dur-fast)}
 .hist-more:hover{color:var(--ink);border-color:var(--g33)}
+@media (max-width:760px){.day.hist{min-height:36px}.hist-more{height:36px;padding:0 16px}}
 .ev-sys .ev-ic{background:var(--bg-3);color:var(--ink-3)}
 .target .tg-warn{display:inline-flex}
 .target .tg-warn svg{color:var(--warn)}
@@ -1571,6 +1573,7 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .c-q-s{font-size:var(--fs-sm);color:var(--ink-4)}
 .c-name{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;font-size:var(--fs-sm);color:var(--ink-3)}
 .c-iwhy{display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:var(--fs-sm);line-height:1.5;color:var(--ink-3)}
+.c-iwhy+.c-btns{margin-top:12px}
 .c-iwhy svg{flex:none;width:13px;height:13px;margin-top:2px;color:var(--ink-4)}
 .teach-scope.is-list{display:flex;flex-direction:column;align-items:stretch;gap:6px}
 .teach-scope.is-list button{justify-content:flex-start;text-align:left;height:auto;min-height:36px;padding:8px 12px;line-height:1.4;white-space:normal}
@@ -1674,6 +1677,9 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .rl-s code{font:inherit;color:var(--ink)}
 .rl-m,.wt-s{font-size:var(--fs-sm);color:var(--ink-4)}
 .rl-row.is-deny .rl-s{color:var(--err-ink)}
+.rl-gone-h{margin:18px 0 8px;font:600 var(--fs-sm)/1.3 var(--sans);color:var(--ink-3)}
+.rl-row.is-revoked{background:transparent;border-style:dashed}
+.rl-row.is-revoked .rl-s{color:var(--ink-3);text-decoration:line-through;text-decoration-color:var(--g33)}
 .rl-c{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:var(--fs-sm);color:var(--ink-3)}
 .wt-main b{font:550 var(--fs-md)/1.35 var(--sans);color:var(--ink)}
 .wt-main code{font-size:var(--fs-sm);color:var(--ink-3);overflow-wrap:anywhere}
@@ -1710,3 +1716,16 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .ch-confirm b{color:var(--ink)}
 .target>span:not(.tg-t):not(.tg-warn):not(.tg-ch){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .target .tg-ch{flex:none}
+/* Phone: every target at least 36 px tall. Kept last so it wins over the base sizes above. */
+@media (max-width:760px){
+  .side-x{width:36px;height:36px}
+  .target{height:36px}
+  .tc-dec{height:36px}
+  .dock-hide{height:36px;min-width:36px}
+  .tb-h{min-height:36px}
+  .nw{height:36px}
+  .hr.hr-need{min-height:36px}
+  .rn-chip,.rn-log,.rn-stopall{height:36px}
+  #say{min-height:36px}
+}
+@media (max-width:760px){.hr-ev.k-stopped .hr-s{display:block;min-width:0;white-space:nowrap}}

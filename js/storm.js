@@ -22,6 +22,7 @@ const RUNTIMES_MS = 5 * 60000;    // a CLI login can change outside XO
 const CHATS_MIN_MS = 30000;       // re-list chats at most this often on our own
 const PAGE = 40;                  // the first page of a conversation; older pages grow from here
 const PAGE_MAX = 200;
+const RUNS_KEEP = 300;            // finished sub-agents kept in memory, beyond those of the open thread
 const LOAD_CAP = 6;               // parallel GETs at boot
 const AWAIT_CAP_MS = 10 * 60000;  // "replying" never outlives this without a signal
 
@@ -123,8 +124,9 @@ export function stormSource(state, emit, event) {
       if (it.state !== "open") continue;
       const h = hostOf(it);
       if (!h) continue;
-      const project = h.chat ? projectOf(h.chat) : "workspace";
-      const host = hosts.get(h.id) || { id: h.id, host: true, project: project || "workspace", chatId: h.chat, plainSession: h.session || null, title: h.title || (project === "workspace" || !project ? "Workspace" : project),
+      // an item of your account (usage) or of a plain chat belongs to no project row in the sidebar
+      const project = h.chat ? projectOf(h.chat) || "workspace" : h.session ? "@chats" : "@account";
+      const host = hosts.get(h.id) || { id: h.id, host: true, project, chatId: h.chat, plainSession: h.session || null, title: h.title || (project === "workspace" ? "Workspace" : project),
         state: "needs_approval", checklist: { items: [], total: 0, done: 0, doing: 0 }, messages: [], asks: [], live: true, loaded: true, busy: false,
         createdAt: Date.parse(it.created_at) || Date.now(), lastAt: Date.parse(it.created_at) || Date.now(), card: {} };
       host.asks.push(...stormAsks(host, [it]));
@@ -573,6 +575,9 @@ export function stormSource(state, emit, event) {
     const t = watched.thread && rawThreads.get(watched.thread);
     if (t && t.session_id) keep.add(t.session_id);
     for (const sid of state.turns.prune(keep)) trimmed.add(sid);
+    // sub-agents: keep every live one and the open thread's; the rest only up to a bounded log
+    const ended = [...state.runs.values()].filter((r) => !["running", "waiting"].includes(r.state) && !keep.has(r.session));
+    if (ended.length > RUNS_KEEP) for (const r of ended.sort((a, b) => String(a.ended_at || "").localeCompare(String(b.ended_at || ""))).slice(0, ended.length - RUNS_KEEP)) state.runs.delete(r.id);
   }, 60000);
   addEventListener("visibilitychange", () => {
     if (document.hidden) return;
@@ -651,8 +656,9 @@ export function stormSource(state, emit, event) {
       decide: () => Promise.reject(new Error("Decide a storm item with decideItem.")),
       /**
        * The person's decision on a review item (UI-reference §2.4): the only writer of an owner
-       * decision. The idempotency key makes a retry harmless. An item decided elsewhere, withdrawn or
-       * expired meanwhile is not an error for the person: it leaves the list, and we say why.
+       * decision. The idempotency key makes a retry harmless. A refusal is never reported as made:
+       * the item is read again (§4.3 #7), so the caller can say what happened instead: decided
+       * elsewhere (and how), withdrawn, expired (the agent was told), or a fresh copy to answer again.
        */
       decideItem: async (id, body) => {
         try {
@@ -660,12 +666,15 @@ export function stormSource(state, emit, event) {
           if (it && it.state && it.state !== "open") { state.review.delete(id); soon(); }
           return it;
         } catch (err) {
-          if (err.code === "already_decided" || err.code === "withdrawn" || err.code === "expired") {
-            state.review.delete(id);
-            soon();
-            event({ kind: "item_gone", code: err.code, id });
-            return null;
-          }
+          if (!err.status) throw err; // never reached XO: the item is as it was
+          let now = null;
+          try { now = await api.reviewItem(id); } catch { /* gone, or unreadable: the code says enough */ }
+          const gone = err.code === "already_decided" || err.code === "withdrawn" || err.code === "expired" || err.code === "review_not_found" || !!(now && now.state && now.state !== "open");
+          if (gone) state.review.delete(id);
+          else if (now) state.review.set(id, { ...(state.review.get(id) || {}), ...now });
+          soon();
+          err.item = now;
+          if (gone) err.gone = err.code || (now && now.state) || "gone";
           throw err;
         }
       },
@@ -711,6 +720,14 @@ export function stormSource(state, emit, event) {
       },
       /** Stop a session's running turn and its sub-agents now (the 3 s Undo is the caller's, sedc 09 #1). */
       stop: (sessionId) => api.abort(sessionId),
+      /** The id of a session's running turn, or null; and the session's own state. */
+      turnOf: (sessionId) => { const t = state.turns.running(sessionId); return t ? t.id : null; },
+      sessionState: (sessionId) => (state.sessions[sessionId] || {}).state || null,
+      /** The agent a chat's coordinator runs on (its newest live session), if known. */
+      coordinatorAgent: (chatId) => {
+        const s = Object.values(state.sessions).filter((x) => x.chat_id === chatId && COORD.has(x.role) && !x.retired_at).sort((a, b) => (b.seq || 0) - (a.seq || 0))[0];
+        return (s && s.agent) || null;
+      },
       /** The coordinator session of a chat that is working now, if any. */
       coordinatorBusy: (project) => {
         const chat = chatIdOf(project);

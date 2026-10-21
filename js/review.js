@@ -22,9 +22,18 @@ export function itemParts(item) {
   const scopes = opts.filter((o) => o.decision === "allow" && (o.scope === "thread" || o.scope === "rule"));
   const primary = opts.find((o) => YES.has(o.decision) && !scopes.includes(o)) || null;
   const back = opts.find((o) => NO.has(o.decision)) || null;
-  // the 20-denials suggestion: "Pause it" approves, "Dismiss" denies
-  const hold = !!(primary && (primary.hold_to_confirm || (item.risk === "destructive" && primary.decision === "allow")));
+  // a hold for any "yes" to a destructive item (allow, approve, done, answer…) and for an option that
+  // asks for one (the 20-denials suggestion's "Pause it"); UI-reference §4.3 #2
+  const hold = !!(primary && (primary.hold_to_confirm || (item.risk === "destructive" && YES.has(primary.decision))));
   return { primary, back, scopes, hold, why: (primary && primary.why) || null };
+}
+
+/** The hold button's words: "Hold to allow", "Hold to approve", "Hold to pause it"… */
+export function holdWords(primary) {
+  const d = primary && primary.decision;
+  const fixed = { allow: "Hold to allow", approve: "Hold to approve", done: "Hold to confirm", continue: "Hold to continue", answer: "Hold to answer" };
+  if (fixed[d] && (d !== "approve" || !primary.label || /^approve$/i.test(primary.label))) return fixed[d];
+  return `Hold to ${String((primary && primary.label) || "confirm").replace(/^\w/, (c) => c.toLowerCase())}`;
 }
 
 /** A question item's questions: [{id, header, question, options: [{label, description}], multi, secret}]. */
@@ -48,7 +57,8 @@ export function itemBody(item, choice, note = "") {
     return body;
   }
   if (choice && choice.scope) {
-    const o = scopes.find((x) => x.id === choice.scope.id) || choice.scope;
+    const o = scopes.find((x) => x.id === choice.scope.id);
+    if (!o) throw new Error("That choice isn't offered for this item.");
     if (o.scope === "thread") return { decision: "allow", scope: "thread" };
     return { decision: "allow", option: o.id, rule_sentence: o.sentence };
   }
@@ -62,6 +72,8 @@ export function itemBody(item, choice, note = "") {
     const name = String(choice.name).trim();
     return name ? { decision: "allow", answer: name } : { decision: "allow" };
   }
+  // only a question takes words or an option; anything else is its own "yes" or "no", never a guess
+  if (choice !== "allow") throw new Error("This one is answered with its buttons, not in words.");
   if (!primary) throw new Error("This item has no answer to give.");
   return { decision: primary.decision };
 }

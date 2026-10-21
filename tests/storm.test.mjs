@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createParser, SSEStream } from "../js/sse.js";
 import { createTurns } from "../js/blocks.js";
-import { itemParts, itemBody, questionsOf, itemEffort, evidenceOf, hostOf, isNo } from "../js/review.js";
+import { itemParts, itemBody, questionsOf, itemEffort, evidenceOf, hostOf, isNo, holdWords } from "../js/review.js";
 
 let passed = 0;
 const pending = [];
@@ -337,6 +337,24 @@ t("approval, action, create_project, create_job, usage, integrity, suggestion", 
   assert.deepEqual([itemParts(ig).primary.label, itemParts(ig).back, itemBody(ig, "allow")], ["Seen", null, { decision: "done" }]);
   const sg = item("suggestion", { risk: null, options: [{ id: "approve", decision: "approve", label: "Pause it", hold_to_confirm: true }, { id: "deny", decision: "deny", label: "Dismiss" }] });
   assert.deepEqual([itemParts(sg).hold, itemBody(sg, "allow"), itemBody(sg, "deny", "ignored")], [true, { decision: "approve" }, { decision: "deny" }], "a deny without note:true carries no note");
+});
+
+t("a destructive yes of any kind is held; words never become a yes; a choice must be offered", () => {
+  const ap = item("approval", { risk: "destructive", options: [{ id: "approve", decision: "approve", label: "Approve" }, { id: "send_back", decision: "send_back", label: "Send back", note: true }] });
+  const ac = item("action", { risk: "destructive", options: [{ id: "done", decision: "done", label: "Done" }, { id: "cant", decision: "cant", label: "Can't", note: true }] });
+  const q = item("question", { risk: "destructive", options: [{ id: "answer", decision: "answer", label: "Answer" }], detail: { questions: [{ id: "answer", question: "Which?", options: [{ label: "~/old" }] }] } });
+  assert.deepEqual([itemParts(ap).hold, itemParts(ac).hold, itemParts(q).hold], [true, true, true]);
+  assert.deepEqual([holdWords(itemParts(ap).primary), holdWords(itemParts(ac).primary), holdWords(itemParts(q).primary)], ["Hold to approve", "Hold to confirm", "Hold to answer"]);
+  assert.equal(holdWords({ decision: "approve", label: "Pause it" }), "Hold to pause it");
+  const notable = item("approval", { options: ap.options });
+  assert.equal(itemParts(notable).hold, false, "a notable approval is one press");
+  // the reply key's words on a non-question are refused, never sent as its yes
+  for (const it of [ac, item("usage", { risk: null, options: [{ id: "continue", decision: "continue", label: "Continue" }, { id: "wait", decision: "wait", label: "Wait" }] })]) {
+    assert.throws(() => itemBody(it, { text: "No, stop" }), /buttons/);
+    assert.throws(() => itemBody(it, { option: "x" }), /buttons/);
+  }
+  const perm = item("permission", { options: [{ id: "once", decision: "allow", label: "Allow once", scope: "once" }, { id: "deny", decision: "deny", label: "Deny" }] });
+  assert.throws(() => itemBody(perm, { scope: { id: "rule:project", scope: "rule", sentence: "made up" } }), /isn't offered/, "a scope not in the item's options is never sent");
 });
 
 for (const run of pending) await run();

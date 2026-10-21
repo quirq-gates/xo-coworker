@@ -37,7 +37,7 @@ mountMode(world);
 
 const params = new URL(location.href).searchParams;
 const T0 = Date.now();
-const PROJ = (id) => (id === "workspace" ? "Workspace" : world.project(id)?.name || id);
+const PROJ = (id) => (id === "workspace" ? "Workspace" : id === "@account" ? "Your account" : id === "@chats" ? "Chats" : world.project(id)?.name || id);
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
@@ -142,6 +142,8 @@ const D = createDecisions({
     if (h) { if (h.chatId) go(convOfChat(h.project), { keepPanel: true }); else if (h.plainSession) go("c:" + h.plainSession); else heraldShow({ kind: "calm", text: "It isn't tied to a conversation", sub: h.title }, 3600); return; }
     go("t:" + tid, { keepPanel: true });
   },
+  // a decision refused after its window: the honest correction replaces "All clear"
+  onNotSent: (title, why) => { setTimeout(() => heraldShow({ kind: "stopped", text: "Not sent", sub: `${String(title).replace(/`/g, "").replace(/[.?!]$/, "")} · ${why}`, force: true }, 7000), RM.matches ? 0 : 950); },
   onAllClear: (summary) => { setTimeout(() => heraldShow({ kind: "clear", text: "All clear", sub: summary }, 4600), RM.matches ? 0 : 900); },
   onUndone: (key) => { if (S.view === "home") { S.pin = key; S.pinAnim = "undo"; } },
   onBreak: (left) => heraldShow({ kind: "calm", text: "Taking a break", sub: `${left} wait safely` }, 5200),
@@ -668,6 +670,7 @@ function liveMessagesOf(conv) {
       if (x.state === "failed") out.push({ key: `${x.id}:failed`, at: x.lastAt, who: "event", text: `${x.title} stopped`, tone: "stop" });
     }
     for (const d of D.decisions().filter((d) => d.project === pid)) out.push({ key: `dec:${d.id}`, at: d.at, who: "event", text: `You ${d.verb.toLowerCase()} · ${d.said || d.label}`, tone: d.choice === "deny" ? "back" : "ok" });
+    for (const d of D.notSent().filter((d) => d.project === pid)) out.push({ key: `dec:${d.id}`, at: d.at, who: "event", text: `Not sent · ${d.said || d.label} · ${d.why}`, tone: "sys" });
   }
   // a thread's work: its session's turns, in place between its messages (storm's blocks)
   if (t && t.sessionId && st.turns) {
@@ -743,6 +746,7 @@ function messagesOf(conv, needs) {
       if (t.state === "failed") out.push({ key: `${t.id}:failed`, at: t.lastAt, who: "event", text: `${t.title} stopped: ${String(t.happened || "").replace(/^Stopped:\s*/i, "")}`, tone: "stop" });
     });
     for (const d of D.decisions().filter((d) => d.project === pid)) out.push({ key: `dec:${d.id}`, at: d.at, who: "event", text: `You ${d.verb.toLowerCase()} · ${d.said || d.label}${d.fromSug ? " · as suggested" : ""}`, tone: d.choice === "deny" ? "back" : "ok" });
+    for (const d of D.notSent().filter((d) => d.project === pid)) out.push({ key: `dec:${d.id}`, at: d.at, who: "event", text: `Not sent · ${d.said || d.label} · ${d.why}`, tone: "sys" });
   } else {
     const t = convThread(conv);
     if (t) {
@@ -827,7 +831,7 @@ function msgItems(conv, needs) {
       const h = m.h;
       html = `<div class="day hist" role="separator">${h.loading ? `<span><i class="spin" aria-hidden="true"></i>Loading earlier messages…</span>` : h.all ? `<span>${h.capped ? "Showing the latest 1,000 messages" : "Beginning of the conversation"}</span>` : `<button type="button" class="hist-more" data-older>Earlier messages</button>`}</div>`;
     } else if (m.who === "event") {
-      html = `<div class="ev ev-${m.tone || "ok"}"><span class="ev-ic">${m.tone === "back" ? ICON.rewind : m.tone === "stop" ? ICON.close : ICON.check}</span><span class="ev-t">${esc(m.text)}</span><time>${clock(m.at)}</time></div>`;
+      html = `<div class="ev ev-${m.tone || "ok"}"><span class="ev-ic">${m.tone === "back" ? ICON.rewind : m.tone === "stop" ? ICON.close : m.tone === "sys" ? ICON.pause : ICON.check}</span><span class="ev-t">${esc(m.text)}</span><time>${clock(m.at)}</time></div>`;
     } else if (m.who === "rec") {
       const canUndo = m.undo && Date.now() < m.until;
       html = `<div class="ev ev-rec${m.refused ? " is-refused" : ""}"><span class="ev-ic">${m.refused ? ICON.close : ICON.router}</span><span class="ev-t">${esc(m.text)}</span>${canUndo ? `<button type="button" class="ev-undo" data-rec-undo="${esc(m.id)}">Undo</button>` : ""}<time>${clock(m.at)}</time></div>`;
@@ -1000,15 +1004,23 @@ function checklistRender(needs) {
 
 // ── sub-agents (U2, ch 14 §11): working now under the checklist; the list and each run in a sheet ──
 const LIVE_RUN = (r) => r.state === "running" || r.state === "waiting";
+const runsAsked = new Map(); // session → when its runs were last listed for the strip
 function runsStrip(t) {
   if (DEMO || !t.sessionId || !world.state.runs) return "";
   const mine = [...world.state.runs.values()].filter((r) => r.session === t.sessionId && !r.hidden);
   const live = mine.filter((r) => LIVE_RUN(r) && (r.depth || 1) === 1);
+  // after a reload the stream hasn't named the runs still working: the thread's counts know, so list them
+  const lr = (world.state.liveRuns || {})[t.sessionId];
+  const working = Math.max((t.runs && (t.runs.running || 0) + (t.runs.waiting || 0)) || 0, lr ? lr.running + lr.waiting : 0, (t.session && t.session.live_runs) || 0);
+  if (working > mine.filter(LIVE_RUN).length && Date.now() - (runsAsked.get(t.sessionId) || 0) > 15000) {
+    runsAsked.set(t.sessionId, Date.now());
+    world.act.listRuns(t.sessionId).then(() => schedule(), () => {});
+  }
   const total = Math.max((t.runs && t.runs.total) || 0, mine.length);
   return runsStripHtml(live, total);
 }
 const runsEl = $("#runs"), runsCard = $("#runs-card");
-const RS = { open: false, session: null, title: "", view: "list", tree: [], counts: null, runId: null, run: null, anc: null, items: [], cursor: null, children: [], loading: false, error: null, gone: null, pollT: null, returnTo: null };
+const RS = { gen: 0, open: false, session: null, title: "", view: "list", tree: [], counts: null, runId: null, run: null, anc: null, items: [], cursor: null, children: [], loading: false, error: null, gone: null, pollT: null, returnTo: null };
 const canStopRuns = () => !!(RS.session && world.act.feature && world.act.feature(RS.session, "runs.stop"));
 function runsRender() {
   if (!RS.open) return;
@@ -1026,7 +1038,7 @@ function runsRender() {
     if (!runsEl.contains(document.activeElement)) runsCard.focus({ preventScroll: true });
   }
 }
-function runsEscape() { if (RS.view === "run") { RS.view = "list"; RS.runId = null; clearTimeout(RS.pollT); RS.keepScroll = false; runsRender(); } else closeRuns(); }
+function runsEscape() { if (RS.view === "run") { RS.gen++; RS.view = "list"; RS.runId = null; clearTimeout(RS.pollT); RS.keepScroll = false; runsRender(); } else closeRuns(); }
 async function openRuns(t, runId = null) {
   if (!t || !t.sessionId) return;
   if (!RS.open) RS.returnTo = document.activeElement;
@@ -1041,31 +1053,36 @@ async function openRuns(t, runId = null) {
 }
 async function openRun(id) {
   clearTimeout(RS.pollT);
+  const gen = ++RS.gen; // a read for another run (or a closed sheet) never writes into this one
   Object.assign(RS, { view: "run", runId: id, run: world.state.runs.get(id) || null, anc: null, items: [], cursor: null, children: [], loading: true, error: null, gone: null, keepScroll: false });
   runsRender();
   try {
     const r = await world.act.run(id);
+    if (gen !== RS.gen) return;
     RS.run = { ...(world.state.runs.get(id) || {}), ...r, title: r.title || r.agent_type || "Sub-agent" };
     RS.anc = r.ancestry || null;
     const findKids = (nodes) => { for (const n of nodes || []) { if (n.id === id) return n.children || []; const k = findKids(n.children); if (k) return k; } return null; };
     RS.children = findKids(RS.tree) || [];
-  } catch (err) { RS.error = err.message; }
-  await readTranscript(id);
-  runsCard.querySelector(".rn-back")?.focus();
+  } catch (err) { if (gen !== RS.gen) return; RS.error = err.message; }
+  await readTranscript(id, gen);
+  if (gen === RS.gen) runsCard.querySelector(".rn-back")?.focus();
 }
 /** Read the transcript; while the run works, read again from the last cursor and add only new items. */
-async function readTranscript(id) {
-  if (RS.runId !== id || !RS.open) return;
+async function readTranscript(id, gen) {
+  const mine = () => RS.gen === gen && RS.runId === id && RS.open;
+  if (!mine()) return;
   try {
     let more = true, guard = 0;
     while (more && guard++ < 20) {
       const d = await world.act.transcript(id, RS.cursor);
+      if (!mine()) return;
       const have = new Set(RS.items.map((i) => i.id));
       RS.items.push(...(d.items || []).filter((i) => !have.has(i.id)));
       if (d.next) RS.cursor = d.next;
       more = !!d.next && (d.items || []).length > 0;
     }
   } catch (err) {
+    if (!mine()) return;
     if (err.code === "transcript_gone") RS.gone = err.summary || err.message;
     else if (err.status === 501) RS.error = "This agent can't show a sub-agent's work.";
     else RS.error = err.message;
@@ -1074,23 +1091,44 @@ async function readTranscript(id) {
   RS.keepScroll = true;
   runsRender();
   const live = world.state.runs.get(id);
-  if (RS.runId === id && RS.open && (!live || LIVE_RUN(live)) && !RS.gone && !RS.error) RS.pollT = setTimeout(() => readTranscript(id), 2500);
+  if (mine() && (!live || LIVE_RUN(live)) && !RS.gone && !RS.error) RS.pollT = setTimeout(() => readTranscript(id, gen), 2500);
 }
 function closeRuns() {
   if (!RS.open) return;
   clearTimeout(RS.pollT);
-  RS.open = false; runsEl.hidden = true; runsCard.innerHTML = ""; runsCard._h = "";
+  RS.gen++; RS.open = false; runsEl.hidden = true; runsCard.innerHTML = ""; runsCard._h = "";
   RS.returnTo?.focus?.({ preventScroll: true });
 }
 /** Stop one sub-agent, or all of a session's, after a 3 s Undo. */
+// Stops waiting out their Undo. One herald shows them all, so a second stop never hides the first's Undo.
+const pendingStops = [];
 function stopRunsUndo(what, fn) {
-  let cancelled = false;
-  heraldShow({ kind: "halt", text: "Stopping", sub: what, undo: () => { cancelled = true; announce("Not stopped."); } }, Kit.COMMIT_MS);
+  const job = { what, cancelled: false };
+  pendingStops.push(job);
+  const showPending = () => {
+    const left = pendingStops.filter((j) => !j.cancelled);
+    if (!left.length) return;
+    heraldShow({ kind: "halt", text: "Stopping", sub: left.map((j) => j.what).join(", "), undo: () => { for (const j of left) j.cancelled = true; pendingStops.length = 0; announce(left.length > 1 ? "Not stopped. They keep working." : "Not stopped."); } }, Kit.COMMIT_MS);
+  };
+  showPending();
   announce(`Stopping ${what} in 3 seconds. Undo to keep it.`);
   setTimeout(async () => {
-    if (cancelled) return;
-    try { await fn(); heraldShow({ kind: "halt", text: "Stopped", sub: what }, 3600); }
-    catch (err) { heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: err.status === 501 ? "this agent can't stop a sub-agent; stop the thread instead" : err.message }, 6000); }
+    const i = pendingStops.indexOf(job);
+    if (i >= 0) pendingStops.splice(i, 1);
+    if (job.cancelled) return;
+    // its Undo is over: the herald keeps only the stops still waiting (or clears, for the result)
+    if (pendingStops.some((j) => !j.cancelled)) showPending(); else if (S.herald && S.herald.kind === "halt" && S.herald.undo) S.herald = null;
+    try {
+      const r = await fn();
+      // 202: a stop was sent (its run.finished confirms it); 200 with nothing to stop: it had ended
+      const none = r && (r.stopping === false || (Array.isArray(r.stopping) && !r.stopping.length));
+      const n = r && Array.isArray(r.stopping) ? r.stopping.length : 0;
+      heraldShow({ kind: "halt", text: none ? "It had already finished" : "Stopping", sub: none ? what : n > 1 ? `${n} sub-agents · what they did is kept` : `${what} · what it did is kept` }, 3600);
+      announce(none ? `${what} had already finished.` : `Stopping ${what}. What it did is kept.`);
+    } catch (err) {
+      if (err.code === "run_not_live") heraldShow({ kind: "halt", text: "It had already finished", sub: what }, 3600);
+      else heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: err.status === 501 ? "this agent can't stop a sub-agent; stop the thread instead" : err.message }, 6000);
+    }
     if (RS.open && RS.session) { try { const d = await world.act.listRuns(RS.session); RS.tree = d.runs || []; RS.counts = d.counts || null; } catch { /* the stream says it too */ } runsRender(); }
   }, Kit.COMMIT_MS);
 }
@@ -1098,7 +1136,7 @@ runsEl.addEventListener("click", (e) => {
   if (e.target === runsEl || e.target.closest("[data-close]")) { closeRuns(); return; }
   const tb = e.target.closest("[data-tb]");
   if (tb) { S.tbOpen[tb.dataset.tb] = !S.tbOpen[tb.dataset.tb]; RS.keepScroll = true; runsRender(); return; }
-  if (e.target.closest("[data-runs-back]")) { clearTimeout(RS.pollT); RS.view = "list"; RS.runId = null; RS.keepScroll = false; runsRender(); return; }
+  if (e.target.closest("[data-runs-back]")) { RS.gen++; clearTimeout(RS.pollT); RS.view = "list"; RS.runId = null; RS.keepScroll = false; runsRender(); return; }
   const st = e.target.closest("[data-run-stop]");
   if (st) { const r = world.state.runs.get(st.dataset.runStop) || { title: "this sub-agent" }; stopRunsUndo(r.title, () => world.act.stopRun(st.dataset.runStop)); return; }
   if (e.target.closest("[data-runs-stop]")) { const sid = RS.session; stopRunsUndo("every sub-agent of this thread", () => world.act.stopRuns(sid)); return; }
@@ -1220,7 +1258,8 @@ setInterval(tickElapsed, 1000);
 // ── the dock line: one calm labelled line (no glow on the composer, ever) ───
 const OWN = new Set(["sent", "started", "ready", "clear", "rec", "rule", "halt"]);
 function heraldShow(h, ms = 4200) {
-  if (S.herald && S.herald.until > Date.now() && (OWN.has(S.herald.kind) || S.herald.undo) && !OWN.has(h.kind) && !h.undo) return;
+  // a herald of your own action holds its place, except for a correction of it ("Not sent")
+  if (!h.force && S.herald && S.herald.until > Date.now() && (OWN.has(S.herald.kind) || S.herald.undo) && !OWN.has(h.kind) && !h.undo) return;
   S.herald = { ...h, until: Date.now() + ms, n: (S.herald?.n || 0) + 1 };
   clearTimeout(heraldShow.t);
   heraldShow.t = setTimeout(schedule, ms + 40);
@@ -1314,14 +1353,16 @@ function growSay() {
 function running() {
   if (!DEMO) {
     // live: a thread whose session works, or the coordinator of this chat while it works
-    if (S.stopping && S.stopping.until > Date.now()) return null; // a Stop is waiting out its Undo
+    if (S.stopping) return null; // a Stop is waiting out its Undo, or on its way
+    // a session already stopping has nothing more to stop
+    const live = (run) => (run && world.act.sessionState(run.session) !== "stopping" ? run : null);
     const t = convThread(S.view);
-    if (t) return t.busy && t.sessionId ? { kind: "thread", t, session: t.sessionId } : null;
-    if (S.view.startsWith("c:")) return CH.busy(S.view) ? { kind: "chat", session: S.view.slice(2) } : null;
+    if (t) return t.busy && t.sessionId ? live({ kind: "thread", t, session: t.sessionId }) : null;
+    if (S.view.startsWith("c:")) return CH.busy(S.view) ? live({ kind: "chat", session: S.view.slice(2) }) : null;
     if (S.view === "chats") return null;
     const chat = chatOf(S.view);
     const sid = chat && world.act.coordinatorBusy ? world.act.coordinatorBusy(chat) : null;
-    return sid ? { kind: "coord", conv: S.view, session: sid } : null;
+    return sid ? live({ kind: "coord", conv: S.view, session: sid }) : null;
   }
   if (S.typing[S.view]) return { kind: "coord", conv: S.view };
   const t = convThread(S.view);
@@ -1436,7 +1477,8 @@ $("#iq").addEventListener("click", () => { if (IQ.isOpen) IQ.close(); else IQ.op
 function stopLive(run) {
   const until = Date.now() + Kit.COMMIT_MS;
   const what = run.kind === "thread" ? run.t.title : run.kind === "chat" ? "This chat" : run.conv === "ws" ? "The coordinator" : `${PROJ(chatOf(run.conv))} coordinator`;
-  const token = { session: run.session, until, cancelled: false };
+  // the turn you chose to stop: if it ends inside the window and another starts, that one is left alone
+  const token = { session: run.session, turn: world.act.turnOf(run.session), until, cancelled: false };
   S.stopping = token;
   heraldShow({ kind: "halt", text: "Stopping", sub: what, undo: () => { token.cancelled = true; S.stopping = null; announce("Not stopped. It keeps working."); schedule(); } }, Kit.COMMIT_MS);
   announce(`Stopping ${what} in 3 seconds. Undo to keep it working.`);
@@ -1444,6 +1486,14 @@ function stopLive(run) {
   schedule();
   setTimeout(async () => {
     if (token.cancelled) return;
+    const now = world.act.turnOf(token.session);
+    if (token.turn && now !== token.turn) {
+      S.stopping = null;
+      heraldShow({ kind: "halt", text: "It had already finished", sub: now ? `${what} · its next turn goes on` : what }, 4200);
+      announce(now ? "It had already finished that turn. The next one goes on; Stop again to end it." : "It had already finished.");
+      schedule();
+      return;
+    }
     try {
       const r = await world.act.stop(token.session);
       heraldShow({ kind: "halt", text: r && r.stopped === false ? "It had already finished" : "Stopped", sub: r && r.stopped === false ? what : `${what} · what it did is kept` }, 4200);

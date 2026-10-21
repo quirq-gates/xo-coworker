@@ -25,6 +25,7 @@ export const ICON = {
   chevron: I('<path d="M6 9l6 6 6-6"/>'),
   list: I('<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>'),
   lock: I('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
+  stop: I('<rect x="7" y="7" width="10" height="10" rx="2.2" fill="currentColor" stroke="none"/>'),
   play: I('<path d="M7 5v14l11-7z"/>'),
   sound: I('<path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16.5 9a4 4 0 0 1 0 6"/>'),
   plus: I('<path d="M12 5v14M5 12h14"/>', ' stroke-width="2"'),

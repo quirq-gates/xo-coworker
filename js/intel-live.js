@@ -29,17 +29,37 @@ export function createLiveIntel({ world, PROJ, onChange, record }) {
   const threadOf = (s) => (s.startsWith("t:") ? world.thread(s.slice(2)) : null);
   const runtimeOf = (s) => {
     const t = threadOf(s);
-    const agent = t ? (t.session && t.session.agent) : (chatOfSession(s) || {}).pin?.agent;
+    const c = t ? null : chatOfSession(s) || {};
+    // a thread: its session's agent; a chat: its pin, else its coordinator's own session
+    const agent = t ? (t.session && t.session.agent) : c.pin?.agent || (world.act.coordinatorAgent ? world.act.coordinatorAgent(c.chatId) : null);
     const rts = world.state.runtimes || [];
     return (rts.find((r) => r.name === agent) || rts[0] || {}).name || null;
   };
-  async function catalog(name) {
+  /** A runtime's models, read fresh each time the popover opens (the chip uses the last read). */
+  async function catalog(name, { fresh = false } = {}) {
     if (!name) return [];
-    if (catalogs.has(name)) return catalogs.get(name);
+    if (catalogs.has(name) && !fresh) return catalogs.get(name);
     const d = await api.models(name);
     catalogs.set(name, d.models || []);
     return catalogs.get(name);
   }
+  // the chip names models before the popover was ever opened: read the catalog once, quietly
+  const reading = new Set();
+  const warm = (s) => {
+    const name = runtimeOf(s);
+    if (!name || catalogs.has(name) || reading.has(name)) return;
+    reading.add(name);
+    catalog(name).then(() => onChange(), () => {}).finally(() => reading.delete(name));
+  };
+  /** The efforts a model takes: its own list, else the runtime's feature list (UI-reference §2.7). */
+  const effortsOf = (m, s) => {
+    if (!m || !m.takes_effort) return [];
+    if (m.efforts && m.efforts.length) return m.efforts;
+    const rt = (world.state.runtimes || []).find((r) => r.name === runtimeOf(s));
+    const f = rt && rt.features && rt.features.features && rt.features.features.effort;
+    return f && f.support !== "unsupported" && Array.isArray(f.values) ? f.values : [];
+  };
+  const modelOf = (id) => (P.models || []).find((x) => x.id === id) || null;
   const nameOf = (id) => { for (const list of catalogs.values()) { const m = list.find((x) => x.id === id); if (m) return m.name; } return id; };
 
   /** What a conversation runs on now: {pinned, model, effort, routing, by}. */
@@ -59,6 +79,7 @@ export function createLiveIntel({ world, PROJ, onChange, record }) {
   }
 
   function chipHtml(s, phone) {
+    warm(s);
     const c = current(s);
     if (phone) return `<span class="iq-g" aria-hidden="true">${c.pinned ? `<i class="iq-dot"></i>` : "◇"}</span><span class="iq-p">${esc(dots(c.effort))}</span>`;
     if (kindOf(s) === "thread") {
@@ -91,6 +112,7 @@ export function createLiveIntel({ world, PROJ, onChange, record }) {
         { id: "space", label: "The Space's", on: !c.ownRouting, line: space.mode === "decision" ? `${cap(space.decision_model)} routes, as set in Settings.` : space.mode === "off" ? "Routing is off for the whole Space." : "The coordinator routes, as set in Settings." },
         { id: "agent", label: "Coordinator", on: c.ownRouting && c.routing.mode === "agent", line: "This chat's coordinator reads each message and decides." },
         ...dms.map((m) => ({ id: `dm:${m.id}`, label: m.label.replace(/^\S+ /, ""), on: c.ownRouting && c.routing.mode === "decision" && c.routing.decision_model === m.id, line: `${m.label} routes this chat's messages; the coordinator decides when it isn't sure.` })),
+        { id: "off", label: "Off", on: c.ownRouting && c.routing.mode === "off", line: "New messages to this chat are refused. Its threads still take your replies." },
       ];
       const on = opts.find((o) => o.on) || opts[0];
       html += `<div class="iq-sec"><p class="iq-lab">Who routes a new message</p><div class="iq-route" role="radiogroup" aria-label="Who routes">${opts.map((o) => `<button type="button" role="radio" data-lroute="${esc(o.id)}" aria-checked="${o.on}">${o.id === "agent" ? ICON.router : ""}${esc(o.label)}</button>`).join("")}</div><p class="iq-rl">${esc(on.line)}</p>` +
@@ -108,13 +130,13 @@ export function createLiveIntel({ world, PROJ, onChange, record }) {
       const curId = c.model;
       html += `<div class="iq-list" role="listbox" aria-label="Models">${fam.map((m) => {
         const sel = c.pinned && curId === m.id;
-        const efforts = m.takes_effort ? (m.efforts && m.efforts.length ? m.efforts : ["low", "medium", "high"]) : [];
+        const efforts = effortsOf(m, s);
         return `<div class="iq-row lv${sel ? " is-sel" : ""}" role="option" aria-selected="${sel}" data-lmodel="${esc(m.id)}">` +
           `<span class="iq-mk" aria-hidden="true">${sel ? `<i class="iq-dot"></i>` : ""}</span><span class="iq-n">${esc(m.name)}</span><span class="iq-tr">${esc(m.description || "")}</span>` +
-          `<span class="iq-d">${efforts.length ? efforts.filter((e) => PIPS[e] <= 3).map((e) => `<button type="button" class="iq-pip${sel && c.effort === e ? " is-sel" : ""}" data-lpin="${esc(m.id)}|${esc(e)}" aria-label="${esc(m.name)}, ${esc(EFFORT_WORD[e] || e)}" title="${esc(EFFORT_WORD[e] || e)}"><span class="pd">${"<i></i>".repeat(PIPS[e])}</span></button>`).join("") : `<button type="button" class="iq-pip is-flat" data-lpin="${esc(m.id)}|" title="This model has no effort setting">Pick</button>`}</span></div>`;
+          `<span class="iq-d">${efforts.length ? efforts.filter((e) => PIPS[e]).map((e) => `<button type="button" class="iq-pip${sel && c.effort === e ? " is-sel" : ""}" data-lpin="${esc(m.id)}|${esc(e)}" aria-label="${esc(m.name)}, ${esc(EFFORT_WORD[e] || e)}" title="${esc(EFFORT_WORD[e] || e)}"><span class="pd">${"<i></i>".repeat(PIPS[e])}</span></button>`).join("") : `<button type="button" class="iq-pip is-flat" data-lpin="${esc(m.id)}|" title="This model has no effort setting">Pick</button>`}</span></div>`;
       }).join("")}</div>`;
     }
-    html += `</div><footer class="iq-f"><span>Applies to ${esc(scopeWord(s))} from its next turn.</span>${c.pinned ? `<button type="button" class="iq-back" data-lauto>Back to ${kind === "thread" ? "the default" : "Auto"}</button>` : ""}</footer>`;
+    html += `</div><footer class="iq-f"><span>Applies to ${esc(scopeWord(s))} from its next turn.</span>${c.pinned ? `<button type="button" class="iq-back" data-lauto>Back to ${kind === "thread" ? "the CLI's default" : "Auto"}</button>` : ""}</footer>`;
     pop.innerHTML = html;
     place();
   }
@@ -135,7 +157,10 @@ export function createLiveIntel({ world, PROJ, onChange, record }) {
     anchor?.setAttribute("aria-expanded", "true");
     pop.focus({ preventScroll: true });
     try {
-      const [models, dms] = await Promise.all([catalog(runtimeOf(s)), kindOf(s) === "thread" ? null : api.routerModels().then((d) => d.models || []).catch(() => [])]);
+      const name = runtimeOf(s);
+      if (catalogs.has(name)) { P.models = catalogs.get(name); render(); }
+      const [models, dms] = await Promise.all([catalog(name, { fresh: true }), kindOf(s) === "thread" ? null : api.routerModels().then((d) => d.models || []).catch(() => [])]);
+      if (!P.open || P.session !== s) return;
       P.models = models; if (dms) P.dms = dms;
     } catch (err) { P.err = err.status === 503 ? "The models can't be read right now." : err.message; }
     render();
@@ -166,24 +191,37 @@ export function createLiveIntel({ world, PROJ, onChange, record }) {
       record(s, { text: `Nothing changed: ${err.message}`, refused: true });
     }
   }
+  // The catalog's "no override" model. Storm stores and runs it as no override, and unlike null it
+  // reaches a live session (a null pin is stored but skipped until the session restarts).
+  const defaultId = () => { const m = (P.models || []).find((x) => x.is_default); return m ? m.id : "default"; };
+  /** What to send to put a conversation back exactly as it ran before a change. */
+  function restoreBody(s, before) {
+    if (kindOf(s) === "thread") {
+      // a thread's pin can't be cleared (backend gap): Undo pins what it ran on, the router's choice
+      return { model: before.model || defaultId(), ...(before.effort ? { effort: before.effort } : {}) };
+    }
+    return before.pinned ? { model: before.model || defaultId(), effort: before.effort || null } : { model: defaultId(), effort: null };
+  }
   function pin(s, model, effort) {
     const before = current(s);
     const kind = kindOf(s);
     const body = kind === "thread" ? { model, ...(effort ? { effort } : {}) } : { model, effort: effort || null };
-    const undo = kind === "thread" ? (before.pinned ? { model: before.model, ...(before.effort ? { effort: before.effort } : {}) } : { model: defaultId() }) : { model: before.model, effort: before.effort };
-    change(s, body, undo, `${kind === "thread" ? "This thread" : cap(scopeWord(s))} now runs ${nameOf(model)}${effort ? ` · ${EFFORT_WORD[effort] || effort}` : ""}, from its next turn`);
+    change(s, body, restoreBody(s, before), `${kind === "thread" ? "This thread" : cap(scopeWord(s))} now runs ${nameOf(model)}${effort ? ` · ${EFFORT_WORD[effort] || effort}` : ""}, from its next turn`);
   }
-  const defaultId = () => { const m = (P.models || []).find((x) => x.is_default); return m ? m.id : "default"; };
   function toAuto(s) {
     const before = current(s);
-    if (kindOf(s) === "thread") change(s, { model: defaultId() }, before.pinned ? { model: before.model, ...(before.effort ? { effort: before.effort } : {}) } : null, "This thread is back on the default model");
-    else change(s, { model: null, effort: null }, { model: before.model, effort: before.effort }, `${cap(scopeWord(s))} is back on its default`);
+    if (kindOf(s) === "thread") {
+      // the closest a thread can come to "no pin": the CLI's own model at its own effort
+      const d = modelOf(defaultId());
+      const ef = d && d.takes_effort ? d.default_effort || null : null;
+      change(s, { model: defaultId(), ...(ef ? { effort: ef } : {}) }, restoreBody(s, before), "This thread is back on the CLI's default model");
+    } else change(s, { model: defaultId(), effort: null }, restoreBody(s, before), `${cap(scopeWord(s))} is back on its default`);
   }
   function route(s, id) {
     const c = chatOfSession(s);
     const before = c && c.routing ? c.routing : null;
-    const body = id === "space" ? { routing: null } : id === "agent" ? { routing: { mode: "agent" } } : { routing: { mode: "decision", decision_model: id.slice(3) } };
-    const label = id === "space" ? "uses the Space's routing" : id === "agent" ? "is routed by its coordinator" : `is routed by ${cap(id.slice(3))}`;
+    const body = id === "space" ? { routing: null } : id === "agent" ? { routing: { mode: "agent" } } : id === "off" ? { routing: { mode: "off" } } : { routing: { mode: "decision", decision_model: id.slice(3) } };
+    const label = id === "space" ? "uses the Space's routing" : id === "agent" ? "is routed by its coordinator" : id === "off" ? "refuses new messages: routing is off" : `is routed by ${cap(id.slice(3))}`;
     change(s, body, { routing: before }, `${s === "ws" ? "The Workspace" : PROJ(s.slice(2))} ${label}`);
   }
 
@@ -197,7 +235,9 @@ export function createLiveIntel({ world, PROJ, onChange, record }) {
     if (row) {
       const m = (P.models || []).find((x) => x.id === row.dataset.lmodel);
       const s = P.session; close();
-      pin(s, row.dataset.lmodel, m && m.takes_effort ? current(s).effort || "medium" : null);
+      // the model's own default effort, or the effort it runs at now when the model takes it
+      const efs = effortsOf(m, s), now = current(s).effort;
+      pin(s, row.dataset.lmodel, !efs.length ? null : m.default_effort && efs.includes(m.default_effort) ? m.default_effort : efs.includes(now) ? now : efs[Math.floor((efs.length - 1) / 2)]);
     }
   });
   pop.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } });

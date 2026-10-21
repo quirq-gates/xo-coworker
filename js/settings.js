@@ -10,6 +10,8 @@ import { renderInline } from "./markdown.js";
 import { holdToConfirm } from "./kit.js";
 
 const PCT = [0.5, 0.6, 0.7, 0.8, 0.9];
+/** The confidence choices, always including the server's own value (set elsewhere, e.g. 0.75). */
+const pcts = (v) => (PCT.some((p) => Math.abs(p - v) < 0.001) || !(v >= 0 && v <= 1) ? PCT : [...PCT, v].sort((a, b) => a - b));
 const when = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
 
 export function createSettings({ world, announce, PROJ, onChange }) {
@@ -28,6 +30,7 @@ export function createSettings({ world, announce, PROJ, onChange }) {
   function renderRouting() {
     const el = box("routing");
     if (!el) return;
+    routeSig = routingSig();
     if (!live) { el.innerHTML = demoNote("Routing and decision models"); return; }
     if (R.err.routing && !R.router) { el.innerHTML = `<p class="set-empty"><b>Couldn't read the routing.</b> ${esc(R.err.routing)}</p>`; return; }
     if (!R.router) { el.innerHTML = `<p class="set-note"><i class="spin" aria-hidden="true"></i> Reading…</p>`; return; }
@@ -46,7 +49,7 @@ export function createSettings({ world, announce, PROJ, onChange }) {
       R.models.map((m) => opt("decision", m.id, m.label, m.connected ? `A decision model routes it; when it isn't sure, the coordinator decides.` : "Connect it below to use it.", !m.connected)).join("") +
       opt("off", null, "Off", "New messages to the Workspace and projects are refused. Threads still take your replies.") +
       `</div>` +
-      (r.mode === "decision" ? `<div class="set-row is-sub"><div class="set-l"><b>When it isn't sure</b><span>Below this confidence, the coordinator decides instead.</span></div><select class="set-sel" data-abstain aria-label="Confidence needed">${PCT.map((p) => `<option value="${p}"${Math.abs((r.abstain_below ?? 0.5) - p) < 0.001 ? " selected" : ""}>${Math.round(p * 100)}% sure</option>`).join("")}</select></div>` : "") +
+      (r.mode === "decision" ? `<div class="set-row is-sub"><div class="set-l"><b>When it isn't sure</b><span>Below this confidence, the coordinator decides instead.</span></div><select class="set-sel" data-abstain aria-label="Confidence needed">${pcts(r.abstain_below ?? 0.5).map((p) => `<option value="${p}"${Math.abs((r.abstain_below ?? 0.5) - p) < 0.001 ? " selected" : ""}>${Math.round(p * 100)}% sure</option>`).join("")}</select></div>` : "") +
       (R.err.route ? `<p class="set-err" role="alert">${esc(R.err.route)}</p>` : "") + `</section>` +
       `<section class="set-sec" aria-labelledby="dm-h"><h3 id="dm-h">Decision models</h3>` +
       `<p class="set-lead">A small model that routes quickly. Its key is saved on this machine and never shown again.</p>` +
@@ -63,8 +66,13 @@ export function createSettings({ world, announce, PROJ, onChange }) {
       (overrides.length ? `<section class="set-sec" aria-labelledby="ov-h"><h3 id="ov-h">Chats with their own routing</h3>` +
         overrides.map((p) => `<div class="set-row"><div class="set-l"><b>${esc(p.name)}</b><span>${p.routing.mode === "decision" ? `Routed by ${esc((R.models.find((m) => m.id === p.routing.decision_model) || {}).label || p.routing.decision_model)}` : p.routing.mode === "agent" ? "Routed by its coordinator" : "Routing off"}</span></div><button type="button" class="btn" data-ov-clear="${esc(p.chatId)}">Use the Space's</button></div>`).join("") + `</section>` : "");
   }
+  // what the Routing page shows, so a change from the stream (another tab, a chat's own routing) re-renders it
+  let routeSig = "";
+  const routingSig = () => JSON.stringify([world.state.router, world.state.projects.map((p) => [p.id, p.routing])]);
   async function setRoute(mode, dm, abstain) {
     const r = world.state.router || R.router || {};
+    // choosing what is already chosen changes nothing (the PUT is a full replace)
+    if (abstain == null && r.mode === mode && (mode !== "decision" || r.decision_model === dm)) return;
     R.err.route = null;
     try {
       // a full replace: abstain_below is sent every time, or it resets (UI-reference §2.3)
@@ -96,7 +104,10 @@ export function createSettings({ world, announce, PROJ, onChange }) {
     if (!live) { el.innerHTML = demoNote("Your rules"); return; }
     if (R.err.rules && !R.rules) { el.innerHTML = `<p class="set-empty"><b>Couldn't read your rules.</b> ${esc(R.err.rules)}</p>`; return; }
     if (!R.rules) { el.innerHTML = `<p class="set-note"><i class="spin" aria-hidden="true"></i> Reading…</p>`; return; }
-    const scopeWord = (r) => (r.scope === "thread" ? "This thread" : r.scope === "project" ? (r.project_pid ? PROJ(projectOfPid(r.project_pid)) : "A project") : "Every project");
+    const scopeWord = (r) => {
+      if (r.scope === "thread") { const t = r.thread_ts && world.thread(r.thread_ts); return t ? `Only in “${t.title}”` : "Only in one thread"; }
+      return r.scope === "project" ? (r.project_pid ? PROJ(projectOfPid(r.project_pid)) : "A project") : "Every project";
+    };
     const row = (r, def) => `<li class="rl-row${r.effect === "deny" ? " is-deny" : ""}"><div class="rl-main"><q class="rl-s">${renderInline(r.sentence || "", true)}</q>` +
       `<span class="rl-m">${def ? "XO's default" : `${esc(scopeWord(r))}${r.tier ? ` · ${esc(r.tier)}` : ""}${r.uses ? ` · answered ${r.uses} ${r.uses === 1 ? "ask" : "asks"}` : ""}${r.created_at ? ` · since ${esc(when(r.created_at))}` : ""}`}</span></div>` +
       (R.confirm && R.confirm.rule === r.id
@@ -104,10 +115,12 @@ export function createSettings({ world, announce, PROJ, onChange }) {
         : `<button type="button" class="btn" data-rule-off="${esc(r.id)}"${R.busy.has(r.id) ? " disabled" : ""}>Revoke</button>`) + `</li>`;
     const mine = R.rules.filter((r) => !r.revoked_at);
     const defs = R.defaults.filter((d) => !d.revoked_at);
+    const gone = R.defaults.filter((d) => d.revoked_at);
     el.innerHTML = `<p class="set-lead">What agents may do without asking you. A rule is only ever made by you: from a decision ("Make it a rule"), word for word. Revoke one and agents ask again.</p>` +
       (R.err.rule ? `<p class="set-err" role="alert">${esc(R.err.rule)}</p>` : "") +
       `<section class="set-sec" aria-labelledby="rl-mine"><h3 id="rl-mine">Your rules <span>${mine.length}</span></h3>${mine.length ? `<ul class="rl-list">${mine.map((r) => row(r, false)).join("")}</ul>` : `<p class="set-note">None yet. When you allow something with "Make it a rule", it appears here.</p>`}</section>` +
-      `<section class="set-sec" aria-labelledby="rl-def"><h3 id="rl-def">XO's defaults <span>${defs.length}</span></h3><p class="set-lead">Safe, routine things: reading inside the project, read-only git, XO's own tools.</p><ul class="rl-list">${defs.map((d) => row(d, true)).join("")}</ul></section>`;
+      `<section class="set-sec" aria-labelledby="rl-def"><h3 id="rl-def">XO's defaults <span>${defs.length}</span></h3><p class="set-lead">Safe, routine things: reading inside the project, read-only git, XO's own tools.</p><ul class="rl-list">${defs.map((d) => row(d, true)).join("")}</ul>` +
+        (gone.length ? `<h4 class="rl-gone-h">Revoked</h4><ul class="rl-list is-gone">${gone.map((d) => `<li class="rl-row is-revoked"><div class="rl-main"><q class="rl-s">${renderInline(d.sentence || "", true)}</q><span class="rl-m">Revoked${d.revoked_at ? ` ${esc(when(d.revoked_at))}` : ""} · agents ask for this</span></div></li>`).join("")}</ul>` : "") + `</section>`;
   }
   const projectOfPid = (pid) => (world.state.projects.find((p) => p.id === pid || p.pid === pid) || {}).id || pid;
 
@@ -137,9 +150,12 @@ export function createSettings({ world, announce, PROJ, onChange }) {
       (R.trees.length ? [...by].map(([p, list]) => `<section class="set-sec"><h3>${esc(PROJ(p))}</h3><ul class="wt-list">${list.map((w) => {
         const key = `${w.chat_id}/${w.thread_ts}`;
         const c = R.confirm && R.confirm.wt === key ? R.confirm : null;
-        const state = w.error ? `Can't be read: ${w.error}` : w.session_state && w.session_state !== "cold" ? "Its agent is still using it" : w.would_lose ? "Has work not kept anywhere else" : "Nothing would be lost";
+        const busy = !!(w.session_state && w.session_state !== "cold");
+        const state = w.error ? `Can't be read: ${w.error}` : w.exists === false ? "The checkout is already gone" : w.xo === false ? "XO didn't make this checkout, so it won't remove it" : busy ? "Its agent is still using it" : w.would_lose ? "Has work not kept anywhere else" : "Nothing would be lost";
+        // offered where the server says it can go, or where it would lose work (shown first, then held)
+        const can = !!(w.removable || (w.would_lose && w.xo !== false && !w.error));
         return `<li class="wt-row"><div class="wt-main"><b>${esc(title(w))}</b><code>${esc(w.branch || w.path)}</code><span class="wt-s${w.would_lose ? " is-warn" : ""}">${esc(state)}${w.thread_state ? ` · thread ${esc(String(w.thread_state).replace("_", " "))}` : ""}</span></div>` +
-          (c ? "" : `<button type="button" class="btn" data-wt="${esc(key)}"${R.busy.has(key) || (w.session_state && w.session_state !== "cold") ? " disabled" : ""}>Remove</button>`) +
+          (c || !(can || busy) ? "" : `<button type="button" class="btn" data-wt="${esc(key)}"${R.busy.has(key) || busy ? " disabled" : ""}>Remove</button>`) +
           (c ? `<div class="wt-confirm" role="alertdialog" aria-label="Remove this worktree">${c.lose ? lossHtml(c.lose) + `<p class="wt-q">Removing it deletes that work. It can't be undone.</p><div class="set-fa"><button type="button" class="btn" data-wt-no>Keep it</button><button type="button" class="b b-hold wt-hold" data-wt-hold="${esc(key)}"><span class="hold-fill" aria-hidden="true"></span><span class="b-l"><span class="hold-ic">${ICON.lock}</span><span class="hold-txt">Hold to remove</span></span></button></div>` : `<p class="wt-q">Remove this checkout? Nothing would be lost.</p><div class="set-fa"><button type="button" class="btn" data-wt-no>Keep it</button><button type="button" class="btn btn-danger" data-wt-yes="${esc(key)}">Remove</button></div>`}</div>` : "") + `</li>`;
       }).join("")}</ul></section>`).join("") : `<p class="set-note">No worktrees right now.</p>`) +
       (R.reported.length ? `<section class="set-sec"><h3>Made by an agent's own tool</h3><p class="set-lead">XO didn't create these, so it never removes them.</p><ul class="wt-list">${R.reported.map((w) => `<li class="wt-row"><div class="wt-main"><code>${esc(w.path)}</code><span class="wt-s">reported ${esc(when(w.reported_at))}</span></div></li>`).join("")}</ul></section>` : "") +
@@ -171,6 +187,14 @@ export function createSettings({ world, announce, PROJ, onChange }) {
     } finally { R.busy.delete(key); }
   }
 
+  // while the Routing page is open, show what the stream changed (never mid-form or mid-question)
+  if (live && world.subscribe) world.subscribe(() => {
+    const page = box("routing")?.closest("[data-page]");
+    if (!R.router || R.form || R.confirm || !page || page.hidden || document.querySelector("#settings").hidden) return;
+    const sig = routingSig();
+    if (sig !== routeSig) { routeSig = sig; renderRouting(); }
+  });
+
   // ── events ──────────────────────────────────────────────────────────────
   document.querySelector("#settings").addEventListener("click", async (e) => {
     const t = e.target;
@@ -195,7 +219,16 @@ export function createSettings({ world, announce, PROJ, onChange }) {
       R.confirm = null; renderRouting(); onChange(); return;
     }
     const ov = t.closest("[data-ov-clear]");
-    if (ov) { try { await api.patchChat(ov.dataset.ovClear, { routing: null }); announce("It uses the Space's routing again."); } catch (err) { R.err.route = err.message; } renderRouting(); return; }
+    if (ov) {
+      try {
+        const c = await api.patchChat(ov.dataset.ovClear, { routing: null });
+        const p = world.state.projects.find((x) => x.chatId === ov.dataset.ovClear);
+        if (p) p.routing = (c && c.routing) || null;
+        announce("It uses the Space's routing again.");
+        onChange();
+      } catch (err) { R.err.route = err.message; }
+      renderRouting(); return;
+    }
     const ro = t.closest("[data-rule-off]");
     if (ro) { R.confirm = { rule: ro.dataset.ruleOff }; renderRules(); return; }
     if (t.closest("[data-rule-no]")) { R.confirm = null; renderRules(); return; }
@@ -207,7 +240,12 @@ export function createSettings({ world, announce, PROJ, onChange }) {
       R.busy.delete(id); await loadRules(); return;
     }
     const wt = t.closest("[data-wt]");
-    if (wt) { R.confirm = null; removeTree(wt.dataset.wt); return; }
+    if (wt) {
+      const w = (R.trees || []).find((x) => `${x.chat_id}/${x.thread_ts}` === wt.dataset.wt);
+      // nothing to lose: one question first; work to lose: the server says exactly what, then a hold
+      if (w && !w.would_lose) { R.confirm = { wt: wt.dataset.wt }; renderTrees(); box("worktrees").querySelector("[data-wt-no]")?.focus(); return; }
+      R.confirm = null; removeTree(wt.dataset.wt); return;
+    }
     if (t.closest("[data-wt-no]")) { R.confirm = null; renderTrees(); return; }
     const wy = t.closest("[data-wt-yes]");
     if (wy) { removeTree(wy.dataset.wtYes); return; }

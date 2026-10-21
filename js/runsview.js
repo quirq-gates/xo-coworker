@@ -32,7 +32,7 @@ export function runsStripHtml(live, total) {
 function rowHtml(r, { canStop, depth = 0 }) {
   const meta = [KIND_WORD[r.kind] || "", r.tool_calls ? `${r.tool_calls} step${r.tool_calls === 1 ? "" : "s"}` : "", r.tokens ? `${num(r.tokens)} tokens` : "", dur(r.started_at, LIVE.has(r.state) ? null : r.ended_at)].filter(Boolean).join(" · ");
   const stop = canStop && LIVE.has(r.state) && r.can_stop !== false
-    ? `<button type="button" class="rn-stop" data-run-stop="${esc(r.id)}" title="Stop this sub-agent (Undo for 3 s)">${ICON.close}<span>Stop</span></button>` : "";
+    ? `<button type="button" class="rn-stop" data-run-stop="${esc(r.id)}" title="Stop this sub-agent (Undo for 3 s)">${ICON.stop}<span>Stop</span></button>` : "";
   return `<li class="rn-row st-${esc(r.state)}${depth ? " is-child" : ""}" style="--d:${depth}">` +
     `<button type="button" class="rn-open" data-run="${esc(r.id)}"><i class="g g-${glyph(r.state)}" aria-hidden="true"></i>` +
     `<span class="rn-main"><span class="rn-t">${esc(r.title)}</span><span class="rn-m">${esc(STATE_WORD[r.state] || r.state)}${meta ? ` · ${esc(meta)}` : ""}</span>` +
@@ -97,7 +97,7 @@ export function runViewHtml(run, { anc, items, children = [], canStop, gone = nu
   const head = `<header class="rn-h is-run"><button type="button" class="rn-back" data-runs-back title="Back to the list">${ICON.back}<span>Sub-agents</span></button>` +
     `<button type="button" class="x" data-close aria-label="Close"></button></header>` +
     `<div class="rn-top">${pathHtml(anc, run)}<div class="rn-st"><span class="badge st-${esc(glyph(run.state))}"><i class="g g-${glyph(run.state)}" aria-hidden="true"></i>${esc(STATE_WORD[run.state] || run.state)}</span>` +
-    (canStop && live && run.can_stop !== false ? `<button type="button" class="rn-stop" data-run-stop="${esc(run.id)}">${ICON.close}<span>Stop</span></button>` : "") + `</div></div>`;
+    (canStop && live && run.can_stop !== false ? `<button type="button" class="rn-stop" data-run-stop="${esc(run.id)}">${ICON.stop}<span>Stop</span></button>` : "") + `</div></div>`;
   let body;
   if (gone) body = `<p class="rn-none">Its transcript is gone. ${esc(gone)}</p>`;
   else if (error) body = `<p class="rn-none">Couldn't read its work: ${esc(error)}</p>`;
