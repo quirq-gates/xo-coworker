@@ -23,7 +23,8 @@ import { createNight } from "./night.js";
 import { createIntel } from "./intel.js";
 import { EFFORT, HELD_SEED, estLine, evidenceFor } from "./content.js";
 import { ICON, XO, NEXT_GLYPH, $, $$, RM, clock, dayOf, short, elapsed, reconcile, sound, wait, dial, morph, expand, shifted } from "./ui.js";
-import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine } from "./timeline.js";
+import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock } from "./timeline.js";
+import { turnHtml } from "./turnview.js";
 
 const world = createWorld();
 // Demo-only features (seeded content, the night, rules, finds, Stop) never run against the real backend.
@@ -61,6 +62,8 @@ const S = {
   view: "home",            // home | ws | p:<project> | t:<thread>
   parent: {}, opener: {}, scroll: {},
   dockFold: {},
+  tbOpen: {},              // storm blocks opened by the person (by block id, or row:<call id>)
+  tEdit: null,             // a thread header field being edited: {tid, field: "title"|"label"}
   recording: null, keyErr: null,  // Settings › Keyboard: the action waiting for a new key, and why the last one was refused            // asks folded away in their thread so you can read it first (by ask key)
   local: {}, alias: new Map(), localThread: new Map(),
   drafts: store.get(DRAFTS, {}),
@@ -163,13 +166,13 @@ const askShort = (n) => {
   if (n.risk === "destructive") return n.ask.title.replace(/:\s.*$/, "");
   return n.ask.title;
 };
-const STATE_WORD = { working: "Working", needs_reply: "Needs you", needs_approval: "Needs you", done: "Done", failed: "Stopped", resolved: "Resolved" };
+const STATE_WORD = { working: "Working", needs_reply: "Needs you", needs_approval: "Needs you", paused: "Paused", done: "Done", failed: "Stopped", resolved: "Resolved" };
 // Live: "Working" only while its agent really works (detail `busy`, or our reply awaits an answer).
 // A working thread whose session sits idle reads "Idle" (P1-8). Demo threads have no `busy`.
 const isBusy = (t) => t.busy === true || (t.state === "working" && t.busy !== false);
 const glyphOf = (t) => (t.state === "working" && t.busy === false ? "idle" : t.state);
 const wordOf = (t) => (glyphOf(t) === "idle" ? "Idle" : STATE_WORD[t.state]);
-const SORT_STATE = { needs_approval: 0, needs_reply: 0, failed: 1, working: 2, done: 3, resolved: 4 };
+const SORT_STATE = { needs_approval: 0, needs_reply: 0, paused: 0, failed: 1, working: 2, done: 3, resolved: 4 };
 const doneToday = () => world.state.threads.filter((t) => t.state === "done" && new Date(t.lastAt).toDateString() === new Date().toDateString());
 const sealed = () => NIGHT.phase === "night";
 const ord = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
@@ -631,7 +634,7 @@ function liveMessagesOf(conv) {
   const { on, alone } = threadAnchors(rows, ids);
   for (const m of rows) {
     const key = S.alias.get(m.id) || m.id;
-    const base = { key, at: m.at, text: m.text, sent: S.alias.has(m.id) };
+    const base = { key, at: m.at, seq: m.seq, text: m.text, sent: S.alias.has(m.id) };
     if (m.who === "you") {
       out.push({ ...base, who: "you", fwd: conv !== "ws" && m.fwd ? m.fwd : null, routed: conv === "ws" ? st.routed[m.id] || null : null });
       if (alone.has(m.id)) out.push({ key: `${m.id}:card`, at: m.at, who: "card", thread: m.id });
@@ -647,11 +650,24 @@ function liveMessagesOf(conv) {
     }
     for (const d of D.decisions().filter((d) => d.project === pid)) out.push({ key: `dec:${d.id}`, at: d.at, who: "event", text: `You ${d.verb.toLowerCase()} · ${d.said || d.label}`, tone: d.choice === "deny" ? "back" : "ok" });
   }
+  // a thread's work: its session's turns, in place between its messages (storm's blocks)
+  if (t && t.sessionId && st.turns) {
+    const agentSeqs = rows.filter((m) => m.who === "agent" && m.seq != null).map((m) => m.seq);
+    for (const tu of st.turns.list((x) => x.session === t.sessionId)) {
+      const blocks = st.turns.blocksOf(tu);
+      const said = agentSeqs.some((q) => q >= (tu.seq ?? Infinity) && q <= (tu.lastSeq || Infinity));
+      out.push({ key: `turn:${tu.id}`, at: Date.parse(tu.at) || Date.now(), seq: tu.seq, who: "turn", turn: tu, blocks, hideAnswer: said });
+    }
+  }
+  // the coordinator's turn for your message failed: say so where you'll look (GitHub #30)
+  const fail = !t && chat ? st.failed && st.failed[chat] : null;
+  if (fail) out.push({ key: `fail:${fail.id}`, at: fail.at, who: "event", tone: "stop", text: `The coordinator couldn't answer: ${fail.error}` });
   if (!rows.length && !locals.length && !(h && (h.loading || h.error))) {
     out.push({ key: "empty", at: -Infinity, who: "note", text: t ? "No messages in this thread yet." : conv === "ws" ? "No messages yet. Ask the coordinator anything below." : "No messages yet. Tell this project's coordinator what you'd like done." });
   }
   out.push(...locals.filter((m) => !m.merged).map((m) => ({ ...m, key: m.id })));
-  out.sort((a, b) => a.at - b.at);
+  // storm's seq orders what the server stored; time orders the rest (your unsent rows, notes)
+  out.sort((a, b) => (a.seq != null && b.seq != null ? a.seq - b.seq : a.at - b.at));
   return out;
 }
 
@@ -745,6 +761,10 @@ function msgItems(conv, needs) {
       html = `<div class="m m-them${cont ? " cont" : ""}">${cont ? `<div class="av av-gap"></div>` : av}<div class="mb">` +
         (cont ? "" : `<div class="mh"><b>${esc(name)}</b>${role ? `<span class="role">${esc(role)}</span>` : ""}<time>${clock(m.at)}</time>${iq}</div>`) +
         `<div class="prose">${renderMarkdown(m.text)}</div>${tid ? threadCardHtml(tid, needs) : ""}${(m.threads || []).map((x) => threadCardHtml(x, needs)).join("")}</div></div>`;
+    } else if (m.who === "turn") {
+      const inner = turnHtml(m.turn, m.blocks, { open: S.tbOpen, hideAnswer: m.hideAnswer });
+      if (!inner) { prev = m; continue; }
+      html = `<div class="m m-them m-turn"><div class="av av-gap"></div><div class="mb">${inner}</div></div>`;
     } else if (m.who === "card") {
       html = `<div class="m m-them m-card"><div class="av av-gap"></div><div class="mb">${threadCardHtml(m.thread, needs)}</div></div>`;
     } else if (m.who === "system") {
@@ -812,7 +832,18 @@ function topRender(needs) {
     who = `<span class="tw-ic" aria-hidden="true">${ICON.project}</span><span class="tw-t"><h1 id="conv-title">${esc(PROJ(pid))}</h1><span class="pj-s">${parts.join(" · ") || (ts.length ? "All quiet" : "No threads yet")}${S.desc[pid] ? ` · ${esc(S.desc[pid])}` : ""}</span></span>`;
     end = ts.length ? `<button type="button" class="all-btn" data-all-threads aria-haspopup="dialog" title="All threads">All threads<span>${ts.length}</span></button>` : "";
   } else if (t) {
-    who = `<h1 class="tw-h" id="conv-title">${esc(t.title)}</h1><span class="badge st-${t.state}"><i class="g g-${glyphOf(t)}" aria-hidden="true"></i>${wordOf(t)}</span>`;
+    const ed = S.tEdit && S.tEdit.tid === t.id ? S.tEdit.field : null;
+    const title = ed === "title"
+      ? `<input class="tw-in tw-in-t" id="tw-edit" data-tedit="title" maxlength="120" value="${esc(t.title)}" aria-label="Thread name">`
+      : `<h1 class="tw-h" id="conv-title">${esc(t.title)}</h1>`;
+    const label = ed === "label"
+      ? `<input class="tw-in tw-in-l" id="tw-edit" data-tedit="label" maxlength="32" value="${esc(t.label || "")}" placeholder="A short label" aria-label="Label">`
+      : t.label ? `<span class="tw-label" title="Label">${esc(t.label)}</span>` : "";
+    const resolved = t.state === "resolved";
+    const acts = !DEMO && world.act.storm ? `<span class="tw-acts"><button type="button" class="tw-act" data-resolve="${esc(t.id)}" data-to="${resolved ? "open" : "resolve"}" title="${resolved ? "Reopen it: its agent can pick it up again" : "Mark it resolved: nothing more is owed"}">${resolved ? ICON.retry : ICON.check}<span>${resolved ? "Reopen" : "Resolve"}</span></button>` +
+      `<button type="button" class="tw-act tw-more" data-tmenu="${esc(t.id)}" aria-haspopup="menu" aria-expanded="${S.tMenu === t.id}" title="Rename or label" aria-label="Rename or label">${ICON.edit}</button>` +
+      (S.tMenu === t.id ? `<span class="tw-menu" role="menu"><button type="button" role="menuitem" data-tfield="title">Rename</button><button type="button" role="menuitem" data-tfield="label">${t.label ? "Change label" : "Add a label"}</button>${t.label ? `<button type="button" role="menuitem" data-tfield="clear-label">Remove the label</button>` : ""}</span>` : "") + `</span>` : "";
+    who = `${title}${label}<span class="badge st-${t.state}"><i class="g g-${glyphOf(t)}" aria-hidden="true"></i>${wordOf(t)}</span>${acts}`;
   } else who = `<span class="tw-t"><h1 id="conv-title">Thread</h1></span>`;
   patch($("#top-who"), who);
   patch($("#top-end"), end);
@@ -982,10 +1013,13 @@ function typingRender() {
   let html = "";
   const chat = !DEMO && !t && S.view !== "home" ? chatOf(S.view) : null;
   if (chat && world.act.replying(chat)) {
-    // live: the heartbeat's coordinator_busy, or our message still waiting for its answer (never a timer)
+    // live: the coordinator's session really works, or our message still waits for its answer (never a timer)
     const aw = world.state.awaiting[chat];
     const who = S.view === "ws" ? "The coordinator" : `${esc(PROJ(chat))} coordinator`;
-    html = `<div class="typing" role="status"><div class="av av-w">${XO}</div><div class="ty-b"><span class="shimmer">${who} is ${aw ? "replying" : "working"}</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>${aw ? `<span class="elapsed" data-since="${aw.at}"></span>` : ""}</div></div>`;
+    const doing = world.act.doing ? world.act.doing(chat) : null;
+    html = `<div class="typing" role="status"><div class="av av-w">${XO}</div><div class="ty-b"><span class="shimmer">${who} is ${aw ? "replying" : "working"}${doing ? ` · ${esc(doing.replace(/`/g, ""))}` : ""}</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>${aw ? `<span class="elapsed" data-since="${aw.at}"></span>` : ""}</div></div>`;
+  } else if (!DEMO && t && t.sessionId && world.state.turns && world.state.turns.running(t.sessionId) && world.state.turns.blocksOf(world.state.turns.running(t.sessionId)).length) {
+    html = ""; // its running turn shows the work itself
   } else if (S.typing[S.view]) {
     html = `<div class="typing" role="status"><div class="av av-w">${XO}</div><div class="ty-b"><span class="shimmer">${S.view === "ws" ? "The coordinator" : `${esc(PROJ(convProject(S.view)))} coordinator`} is replying</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>`;
   } else if (t && isBusy(t)) {
@@ -1018,11 +1052,11 @@ function heraldRender(needs) {
     const inner = `${ic}<span class="hr-t">${esc(h.text)}</span>${h.sub ? `<span class="hr-s">${esc(h.sub)}</span>` : ""}${h.open ? `<span class="hr-go">Open ${ICON.arrow}</span>` : h.decide ? `<span class="hr-go">Look ${ICON.arrow}</span>` : ""}`;
     html = h.open ? `<button type="button" class="hr hr-ev k-${h.kind}" data-go="${esc(h.open)}" data-hn="${h.n}">${inner}</button>`
       : h.decide ? `<button type="button" class="hr hr-ev k-${h.kind}" data-decide="${esc(h.decide)}" data-hn="${h.n}">${inner}</button>`
-      : h.undo ? `<div class="hr hr-ev k-${h.kind}" data-hn="${h.n}">${inner}<button type="button" class="hr-undo" data-herald-undo>Undo</button></div>`
+      : h.undo ? `<div class="hr hr-ev k-${h.kind}" data-hn="${h.n}">${inner}<button type="button" class="hr-undo" data-herald-undo>${esc(h.undoLabel || "Undo")}</button></div>`
       : `<div class="hr hr-ev k-${h.kind}" data-hn="${h.n}">${inner}</div>`;
-  } else if (!DEMO && connLine(world.state.status, world.state.statusError, world.state.error)) {
-    // live: an honest, persistent line when XO can't be reached or can't take messages (P0-8)
-    const c = connLine(world.state.status, world.state.statusError, world.state.error);
+  } else if (!DEMO && connLine(world.state)) {
+    // live: an honest, persistent line when XO can't be reached, can't run, or waits on a limit (P0-8)
+    const c = connLine(world.state);
     html = `<div class="hr hr-conn k-${c.kind}" role="status"><span class="hr-ic ${c.kind === "down" ? "k-stopped" : "k-calm"}">${c.kind === "down" ? ICON.retry : ICON.pause}</span><span class="hr-t">${esc(c.text)}</span><span class="hr-s">${esc(c.sub)}</span></div>`;
   } else if (S.view === "home" || convThread(S.view) || sealed()) html = "";
   else {
@@ -1126,7 +1160,7 @@ function updateComposer() {
   else if (S.view === "ws" || S.view === "home") html = `${ICON.arrow}<span>To the <b>Workspace</b> coordinator</span><span class="muted">· @ to aim at a project</span>`;
   else html = `${ICON.arrow}<span>To the <b>${esc(PROJ(convProject(S.view)))}</b> coordinator</span>`;
   if ($("#target")._h !== html) { $("#target").innerHTML = html; $("#target")._h = html; }
-  say.placeholder = t ? "Reply to the agent…" : S.view === "home" ? (PHONE.matches ? "What should get done?" : "What should get done? Use @project to aim it") : S.view === "ws" ? "Ask anything across your projects…" : `Message ${PROJ(convProject(S.view))}…`;
+  say.placeholder = t ? (t.state === "resolved" ? "Reply to reopen it…" : "Reply to the agent…") : S.view === "home" ? (PHONE.matches ? "What should get done?" : "What should get done? Use @project to aim it") : S.view === "ws" ? "Ask anything across your projects…" : `Message ${PROJ(convProject(S.view))}…`;
   $("#say-label").textContent = say.placeholder;
   $("#composer").classList.toggle("has-text", !!say.value);
   sendRender();
@@ -1220,12 +1254,9 @@ function lift(el, from) {
 /** Live: why sending is paused right now, or "" (classic composerBlock, in plain words). */
 function liveBlock() {
   if (DEMO) return "";
-  const st = world.state;
-  if (st.statusError || st.error) return "Can't reach XO right now";
-  if (!st.status) return "Connecting to XO…";
-  if (!st.status.supported) return `The ${st.status.agent || "current"} backend has no projects chat`;
-  if (!st.status.enabled) return "The router is off (XO_ROUTER_MODE=off)";
-  return "";
+  const t = convThread(S.view);
+  const toThread = !!t && !/(^|\s)@[\w.-]+/.test(say.value);
+  return sendBlock(world.state, { timeline: !toThread });
 }
 
 function sendLive(raw) {
@@ -1241,7 +1272,8 @@ function sendLive(raw) {
   const conv = thread ? S.view : convOfChat(chat);
   const here = conv === S.view;
   const from = say.getBoundingClientRect();
-  const m = { id: `l${++S.n}_${Date.now().toString(36)}`, conv, at: Date.now(), who: "you", text, status: "sending", target: thread ? null : chat };
+  // client_id: a retry of this exact message is the same request, so the server stores it once (UI-reference §0.7)
+  const m = { id: `l${++S.n}_${Date.now().toString(36)}`, conv, at: Date.now(), who: "you", text, status: "sending", target: thread ? null : chat, cid: `ui_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}` };
   (S.local[conv] = S.local[conv] || []).push(m);
   say.value = ""; saveDraft(); updateComposer();
   const btn = $("#send"); btn.classList.remove("fired"); void btn.offsetWidth; btn.classList.add("fired");
@@ -1255,7 +1287,7 @@ function sendLive(raw) {
 async function deliverLive(m, thread) {
   m.status = "sending"; delete m.err;
   try {
-    const row = thread ? await world.act.reply(thread.id, m.text) : await world.act.ask(m.target || "workspace", m.text);
+    const row = thread ? await world.act.reply(thread.id, m.text, { clientId: m.cid }) : await world.act.ask(m.target || "workspace", m.text, { clientId: m.cid });
     if (row && row.id) { S.alias.set(row.id, m.id); m.merged = true; }
     m.status = "sent";
     announce(thread ? "Sent to the thread." : `Sent to ${m.target === "workspace" ? "the coordinator" : PROJ(m.target)}.`);
@@ -1501,6 +1533,57 @@ function decideKey(key, opts) {
   D.open(key, opts);
 }
 
+// ── a thread's own header (live): resolve and reopen with Undo (R1), rename, label ──
+async function resolveThread(tid, resolved, { undo = true } = {}) {
+  const t = world.thread(tid);
+  if (!t) return;
+  const name = t.title;
+  try {
+    await world.act.resolve(tid, resolved);
+    announce(resolved ? `Resolved ${name}.` : `Reopened ${name}.`);
+    // Undo is the same call the other way (the route is idempotent); it never starts or stops a turn
+    if (undo) heraldShow({ kind: resolved ? "done" : "calm", text: resolved ? "Resolved" : "Reopened", sub: name, undo: () => resolveThread(tid, !resolved, { undo: false }) }, 6000);
+  } catch (err) {
+    heraldShow({ kind: "stopped", text: resolved ? "Couldn't resolve it" : "Couldn't reopen it", sub: err.message, undo: () => resolveThread(tid, resolved, { undo }), undoLabel: "Retry" }, 8000);
+  }
+}
+function startThreadEdit(tid, field) {
+  S.tEdit = { tid, field };
+  $("#top-who")._h = null;
+  render();
+  const inp = $("#tw-edit");
+  if (inp) { inp.focus(); inp.select(); }
+}
+async function saveThreadField(tid, field, value) {
+  S.tEdit = null;
+  $("#top-who")._h = null;
+  const t = world.thread(tid);
+  if (!t) { render(); return; }
+  const v = String(value || "").trim();
+  if (field === "title" && (!v || v === t.title)) { render(); return; }
+  if (field === "label" && v === (t.label || "")) { render(); return; }
+  render();
+  try {
+    await world.act.editThread(tid, field === "title" ? { title: v.slice(0, 120) } : { label: v ? v.slice(0, 32) : null });
+    announce(field === "title" ? `Renamed to ${v}.` : v ? `Labelled ${v}.` : "Label removed.");
+  } catch (err) {
+    heraldShow({ kind: "stopped", text: field === "title" ? "Couldn't rename it" : "Couldn't change the label", sub: err.message }, 6000);
+  }
+}
+$("#top").addEventListener("keydown", (e) => {
+  const inp = e.target.closest?.("[data-tedit]");
+  if (inp) {
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); saveThreadField(S.tEdit?.tid, inp.dataset.tedit, inp.value); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); S.tEdit = null; $("#top-who")._h = null; render(); $("#conv-title")?.focus?.(); }
+    return;
+  }
+  if (e.key === "Escape" && S.tMenu) { e.preventDefault(); e.stopPropagation(); S.tMenu = null; $("#top-who")._h = null; render(); $("[data-tmenu]")?.focus(); }
+});
+$("#top").addEventListener("focusout", (e) => {
+  const inp = e.target.closest?.("[data-tedit]");
+  if (inp && S.tEdit) setTimeout(() => { if (S.tEdit && document.activeElement !== inp) saveThreadField(S.tEdit.tid, inp.dataset.tedit, inp.value); }, 0);
+});
+
 // ── clicks ──────────────────────────────────────────────────────────────────
 document.addEventListener("click", (e) => {
   const t = e.target;
@@ -1540,7 +1623,18 @@ document.addEventListener("click", (e) => {
   if (fx) { FV.dismiss(fx.dataset.findX); announce("Put aside. It won't come back today."); schedule(); return; }
   const ru = t.closest("[data-rec-undo]");
   if (ru) { undoRecord(ru.dataset.recUndo); return; }
-  if (t.closest("[data-herald-undo]")) { if (S.herald?.undo) undoRecord(S.herald.undo); return; }
+  if (t.closest("[data-herald-undo]")) { const u = S.herald?.undo; if (typeof u === "function") { S.herald.until = 0; schedule(); u(); } else if (u) undoRecord(u); return; }
+  // storm blocks: open or fold a block or a row (thinking steps, an activity group, a command's output)
+  const tb = t.closest("[data-tb]");
+  if (tb) { const k = tb.dataset.tb; S.tbOpen[k] = !S.tbOpen[k]; schedule(); return; }
+  // a thread's own header: resolve or reopen (R1), rename, label
+  const rs = t.closest("[data-resolve]");
+  if (rs) { resolveThread(rs.dataset.resolve, rs.dataset.to === "resolve"); return; }
+  const tm = t.closest("[data-tmenu]");
+  if (tm) { S.tMenu = S.tMenu === tm.dataset.tmenu ? null : tm.dataset.tmenu; $("#top-who")._h = null; schedule(); if (S.tMenu) requestAnimationFrame(() => $(".tw-menu button")?.focus()); return; }
+  const tf = t.closest("[data-tfield]");
+  if (tf) { const tid = S.tMenu; S.tMenu = null; if (tf.dataset.tfield === "clear-label") saveThreadField(tid, "label", ""); else startThreadEdit(tid, tf.dataset.tfield); return; }
+  if (S.tMenu && !t.closest(".tw-menu")) { S.tMenu = null; $("#top-who")._h = null; schedule(); }
   if (t.closest("[data-ck]")) { const th = convThread(S.view); if (th) { S.ckOpen[th.id] = !S.ckOpen[th.id]; checklistRender(D.needItems()); } return; }
   const o = t.closest("[data-nx-opt]");
   if (o) { const n = homeParts().next; if (n) { o.classList.add("pressed"); nextDecide({ option: n.ask.options[+o.dataset.nxOpt] }); } return; }
@@ -1593,8 +1687,8 @@ function allRender() {
   const pid = convProject(S.view);
   const q = $("#all-q").value.trim().toLowerCase();
   const needs = D.needItems();
-  const ts = threadsOf(pid);
-  const cat = (t) => (needs.some((n) => n.t.id === t.id && n.admitted && n.group !== "stopped") ? "needs" : t.state === "failed" ? "stopped" : t.state === "working" || WAITING(t.state) ? "working" : t.state === "done" ? "done" : "other");
+  const ts = world.state.threads.filter((t) => t.project === pid);
+  const cat = (t) => (needs.some((n) => n.t.id === t.id && n.admitted && n.group !== "stopped") ? "needs" : t.state === "failed" ? "stopped" : t.state === "working" || WAITING(t.state) ? "working" : t.state === "done" || t.state === "resolved" ? "done" : "other");
   const counts = { all: ts.length, needs: 0, working: 0, done: 0, stopped: 0 };
   for (const t of ts) { const c = cat(t); if (counts[c] != null) counts[c]++; }
   const F = [["all", "All"], ["needs", "Needs you"], ["working", "Working"], ["done", "Done"], ["stopped", "Stopped"]];
@@ -1607,13 +1701,13 @@ function allRender() {
   const row = (t) => {
     const c = t.checklist;
     const k = cat(t);
-    return `<li><button type="button" class="ar st-${k}" data-go="t:${esc(t.id)}"><i class="g g-${k === "needs" ? "needs_reply" : t.state}" aria-hidden="true"></i><span class="ar-t">${esc(t.title)}</span><span class="ar-s">${k === "needs" ? "Needs you" : wordOf(t)}</span><span class="mini" aria-label="${c.done} of ${c.total}"><i style="--p:${c.total ? c.done / c.total : 0}"></i></span><span class="ar-a">${esc(short(t.lastAt))}</span></button></li>`;
+    return `<li><button type="button" class="ar st-${k}" data-go="t:${esc(t.id)}"><i class="g g-${k === "needs" ? "needs_reply" : glyphOf(t)}" aria-hidden="true"></i><span class="ar-t">${esc(t.title)}</span>${t.label ? `<span class="ar-l">${esc(t.label)}</span>` : ""}<span class="ar-s">${k === "needs" ? "Needs you" : wordOf(t)}</span><span class="mini" aria-label="${c.done} of ${c.total}"><i style="--p:${c.total ? c.done / c.total : 0}"></i></span><span class="ar-a">${esc(short(t.lastAt))}</span></button></li>`;
   };
   const fold = S.allFilter === "all" && !q;
   const liveL = fold ? list.filter((t) => cat(t) !== "done") : list;
   const done = fold ? list.filter((t) => cat(t) === "done") : [];
   let html = liveL.length ? `<ul class="ar-list">${liveL.map(row).join("")}</ul>` : "";
-  if (done.length) html += `<div class="ar-done${S.allDone ? " is-open" : ""}"><button type="button" class="ar-fold" data-all-done aria-expanded="${S.allDone}">${ICON.check}<span><b>${done.length} done</b> this week</span>${ICON.chevron}</button><div class="ar-db"${S.allDone ? "" : " hidden"}><div class="ar-di"><ul class="ar-list">${done.map(row).join("")}</ul></div></div></div>`;
+  if (done.length) html += `<div class="ar-done${S.allDone ? " is-open" : ""}"><button type="button" class="ar-fold" data-all-done aria-expanded="${S.allDone}">${ICON.check}<span><b>${done.length} done</b>${done.some((t) => t.state === "resolved") ? " or resolved" : ""}</span>${ICON.chevron}</button><div class="ar-db"${S.allDone ? "" : " hidden"}><div class="ar-di"><ul class="ar-list">${done.map(row).join("")}</ul></div></div></div>`;
   if (!html) html = `<p class="ar-none">Nothing matches “${esc(q)}”.</p>`;
   $("#all-list").innerHTML = html;
 }

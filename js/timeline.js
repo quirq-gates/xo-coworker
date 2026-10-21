@@ -1,27 +1,45 @@
-// Live mode: pure helpers between the projects-chat API rows and the UI's
-// message and ask shapes. No DOM, no fetch: tested from Node
-// (tests/logic.test.mjs).
+// Live mode: pure helpers between storm's rows (UI-reference §3) and the UI's message and ask
+// shapes. No DOM, no fetch: tested from Node (tests/logic.test.mjs).
 
-export const AWAIT_MAX_MS = 180000;
-const WAITING = (s) => s === "needs_reply" || s === "needs_approval";
 
-/** True while we sent something and no reply has come yet (capped at 3 min). */
-export const awaitingNow = (aw, now = Date.now()) => !!aw && now - aw.at < AWAIT_MAX_MS;
+const COORDINATORS = new Set(["workspace-coordinator", "project-coordinator"]);
 
-/** An API message row → the UI's message: {id, at, who: you|coord|agent|system, text, fwd}. */
+/**
+ * A storm message row → the UI's message: {id, seq, at, who: you|coord|agent|system, text, fwd, job}.
+ * author_kind owner|agent|system; an agent's author_id is its role (UI-reference §3 Message).
+ */
 export function uiMsg(row) {
   const who = row.author_kind === "owner" ? "you"
     : row.author_kind === "system" ? "system"
-      : row.author_id === "coordinator" ? "coord" : "agent";
-  const f = row.forwarded_from;
+      : COORDINATORS.has(row.author_id) ? "coord" : "agent";
+  const x = row.extra || {};
+  const f = x.forwarded_from;
   return {
     id: row.id,
-    at: Date.parse(row.written_at || row.ts) || 0,
+    seq: row.seq ?? null,
+    at: Date.parse(row.created_at) || 0,
     who,
+    role: row.author_id || null,
     text: String(row.text ?? ""),
-    fwd: f && f.message_id ? { chatId: f.chat_id || null, id: f.message_id } : null,
+    fwd: f && f.message_id ? { chatId: f.chat_id || null, id: f.message_id, via: f.via || [] } : null,
+    job: x.job || null,
+    noOne: !!row.reply_to, // XO's "This message reached no one: …" note
   };
 }
+
+/** Merge storm rows into a list ordered by seq (ids are not ordered). Returns {list, added}. */
+export function mergeRows(list, incoming) {
+  const byId = new Map(list.map((m) => [m.id, m]));
+  const added = [];
+  for (const row of incoming || []) {
+    if (!row || !row.id) continue;
+    const old = byId.get(row.id);
+    if (!old) added.push(row);
+    byId.set(row.id, old && old.seq != null && row.seq == null ? { ...row, seq: old.seq } : row);
+  }
+  return { list: [...byId.values()].sort(bySeq), added };
+}
+const bySeq = (a, b) => (a.seq ?? Infinity) - (b.seq ?? Infinity) || (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0);
 
 /**
  * Optimistic rows whose server copy is already in `rows` (the stream can beat
@@ -64,29 +82,38 @@ export function askText(md, max = 140) {
   return { title, rest: s.slice(used).trim() };
 }
 
+const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).replace(/\s+\S*$/, "") + "…" : s);
+
 /**
- * The live ask for a thread that waits on the person. The backend's card has
- * no `needs_you` (always ""), so the ask is the thread agent's last message
- * (else the card's `happened`). It is a question with no invented options:
- * the answer is a reply in words. The id carries the card's epoch / update
- * time, so a new ask on the same thread is a new key and reappears.
+ * What a storm thread asks of the person (UI-reference §3 Thread, §2.4 Item).
+ * - Open review items on the thread are its asks, one each, in the queue's order (the server's
+ *   risk, title, why and options travel with them; the UI decides nothing).
+ * - needs_reply: the card's needs_you (the agent's last reply), answered in words.
+ * - paused: the loop breaker stopped it; a reply in the thread resumes it.
+ * The id carries the card's update time, so a new ask on the same thread is a new key.
  */
-export function liveAsks(t, lastAgentText) {
-  if (!WAITING(t.state)) return [];
-  const full = String(lastAgentText || t.happened || "").trim();
-  const { title, rest } = askText(full);
-  const approval = t.state === "needs_approval";
-  return [{
-    id: `${t.id}:${t.epoch ?? t.cardAt ?? "0"}`,
-    kind: approval ? "approval" : "question",
-    title: title || "It's waiting for your reply",
-    detail: rest.length > 220 ? rest.slice(0, 219).replace(/\s+\S*$/, "") + "…" : rest,
-    full,
-    risk: "notable",
-    options: null,
-    replyOnly: !approval,
-    live: true,
-  }];
+export function stormAsks(t, items = []) {
+  const asks = [];
+  for (const it of items) {
+    asks.push({
+      id: it.id, kind: it.kind, title: it.title || "It needs your decision", detail: it.why || "",
+      risk: it.risk || "notable", riskReasons: it.risk_reasons || [], options: null,
+      blocking: !!it.blocking, item: it, live: true, storm: true,
+    });
+  }
+  if (asks.length) return asks;
+  if (t.state === "needs_reply") {
+    const full = String((t.card && t.card.needs_you) || t.happened || "").trim();
+    const { title, rest } = askText(full);
+    asks.push({ id: `${t.id}:${(t.card && t.card.updated_at) || t.lastAt}`, kind: "question", title: title || "It's waiting for your reply", detail: clip(rest, 220), full, risk: "notable", options: null, replyOnly: true, live: true });
+  } else if (t.state === "paused") {
+    const why = String(t.paused || "it was stuck on a denied step");
+    asks.push({ id: `${t.id}:paused:${t.lastAt}`, kind: "question", title: "It paused and waits for you", detail: `Why: ${why}. A reply in the thread resumes it.`, full: why, risk: "notable", options: null, replyOnly: true, live: true, paused: true });
+  } else if (t.state === "needs_approval") {
+    // the item hasn't reached this tab yet (or was decided elsewhere a moment ago)
+    asks.push({ id: `${t.id}:approval:${t.lastAt}`, kind: "approval", title: String((t.card && t.card.needs_you) || "It needs your decision"), detail: "Open the thread to see what it needs.", risk: "notable", options: null, replyOnly: true, live: true, pending: true });
+  }
+  return asks;
 }
 
 /**
@@ -134,23 +161,61 @@ export function stripTarget(text, token) {
   return String(text || "").replace(re, "$1").trim();
 }
 
-/** Classic's titles for a failed send. */
+const STORM_DOWN = new Set(["engine_not_running", "engine_elsewhere", "engine_failed", "store_refused", "store_failed", "stream_not_running"]);
+const CLI_NAME = { claude_code: "Claude", codex: "Codex", antigravity: "Antigravity" };
+/** A runtime's name as people say it (display only). */
+export const cliName = (name) => CLI_NAME[name] || String(name || "The agent");
+
+/** A plain title for a failed send (the storm error codes, UI-reference §2.2). */
 export function sendErrorTitle(err) {
   if (!err) return "Message not sent";
-  if (err.code === "router_off") return "Router is off";
-  if (err.status === 501) return "Not supported by this backend";
+  if (err.code === "router_off") return "The router is off";
+  if (err.code === "chat_retired") return "This project was removed";
+  if (err.code === "auth_required") return "The agent isn't connected";
+  if (err.code === "no_runtime") return "No agent can run this";
+  if (err.code === "coordinator_busy") return "The coordinator is busy";
+  if (err.code === "thread_not_found" || err.code === "session_retired") return "This thread is gone";
+  if (STORM_DOWN.has(err.code)) return "XO's chat engine isn't running";
+  if (err.status === 501) return "Not supported by this agent";
   if (err.status === 403) return "Refused by the proxy";
   if (err.status === 0 || err.status === 502) return "Can't reach XO";
   return "Message not sent";
 }
 
-/** The honest connection line, or null when all is well. */
-export function connLine(status, statusError, error) {
-  if (statusError || error) return { kind: "down", text: "Can't reach XO", sub: "retrying · what you see may be out of date" };
-  if (!status) return null;
-  if (!status.supported) return { kind: "off", text: "This backend has no projects chat", sub: `${status.agent || "the current"} agent · sending is off` };
-  if (!status.enabled) return { kind: "off", text: "The router is off", sub: "XO_ROUTER_MODE=off · sending is paused" };
+const hhmm = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
+
+/**
+ * The one honest line about the connection and what can run, or null when all is well.
+ * w: {error, conn, statusError, statusCode, runtimes, router, pools, loaded}
+ */
+export function connLine(w) {
+  if (!w) return null;
+  if (w.error || (w.statusError && !STORM_DOWN.has(w.statusCode)) || w.conn === "down") return { kind: "down", text: "Can't reach XO", sub: "retrying · what you see may be out of date" };
+  if (STORM_DOWN.has(w.statusCode)) return { kind: "down", text: "XO's chat engine isn't running", sub: "retrying · nothing you write is lost" };
+  const rts = w.runtimes || [];
+  if (rts.length && rts.every((r) => !r.cli || r.cli.logged_in === false || r.error)) {
+    const r = rts[0];
+    return { kind: "off", text: `${cliName(r.name)} isn't connected`, sub: "connect it in XO · sending waits until then" };
+  }
+  if (w.router && w.router.mode === "off") return { kind: "off", text: "The router is off", sub: "new messages to the Workspace and projects are refused · threads still take replies" };
+  const pools = Object.values(w.pools || {});
+  const closed = pools.find((p) => p.state === "closed");
+  if (closed) return { kind: "wait", text: `Paused until ${hhmm(closed.resets_at)}`, sub: "usage limit · running work finishes, new work waits" };
+  const paid = pools.find((p) => p.state === "paid");
+  if (paid) return { kind: "wait", text: "Paused for your choice", sub: "your subscription moved onto paid usage · it's in Needs you" };
   return null;
+}
+
+/** Why sending is paused right now ("" when it isn't), for the composer. timeline: posting to a chat's timeline. */
+export function sendBlock(w, { timeline = true } = {}) {
+  if (!w) return "";
+  if (w.error && !w.loaded) return "Can't reach XO right now";
+  if (STORM_DOWN.has(w.statusCode)) return "XO's chat engine isn't running";
+  if (!w.loaded) return "Connecting to XO…";
+  const rts = w.runtimes || [];
+  if (rts.length && rts.every((r) => !r.cli || r.cli.logged_in === false || r.error)) return `${cliName(rts[0].name)} isn't connected`;
+  if (timeline && w.router && w.router.mode === "off") return "The router is off";
+  return "";
 }
 
 /** Run `fn` over `items`, at most `cap` at a time. */

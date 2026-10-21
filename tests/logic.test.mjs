@@ -1,11 +1,11 @@
 // Exercises the UI's pure modules (markdown, model, timeline) against fixed
-// cases and against live data from the proxy (GET only: nothing is written).
+// cases and against live storm data through the proxy (GET only: nothing is written).
 //   node tests/logic.test.mjs            (UI server on 127.0.0.1:5180)
 //   XO_UI=http://127.0.0.1:5180 node tests/logic.test.mjs
 import assert from "node:assert/strict";
 import { renderMarkdown, renderInline, threadLinks } from "../js/markdown.js";
-import { groupThreads, mergeMessages, parseChecklist, routedIndex, threadState, lastId, composerBlock } from "../js/model.js";
-import { uiMsg, echoes, askText, liveAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, awaitingNow, mapLimit, plainText } from "../js/timeline.js";
+import { parseChecklist, tasksOf } from "../js/model.js";
+import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, sendBlock, mapLimit, plainText } from "../js/timeline.js";
 
 let passed = 0;
 const t = (name, fn) => {
@@ -59,49 +59,34 @@ t("checklist parse", () => {
   assert.equal(c.doing, 1);
   assert.equal(c.items.at(-1).state, "note");
 });
-t("grouping order and empties hidden", () => {
-  const th = [
-    { ts: "a", state: "working", card: { state: "needs_reply" }, last_activity_at: "2026-01-01T00:00:00Z" },
-    { ts: "b", state: "resolved", card: { state: "done" }, last_activity_at: "2026-01-02T00:00:00Z" },
-    { ts: "c", state: "working", card: null, last_activity_at: "2026-01-03T00:00:00Z" },
-    { ts: "d", state: "done", card: { state: "working" }, last_activity_at: "2026-01-04T00:00:00Z" },
-    { ts: "e", state: "failed", card: null, last_activity_at: "2026-01-05T00:00:00Z" },
-  ];
-  assert.deepEqual(groupThreads(th).map((g) => [g.key, g.threads.map((x) => x.ts)]), [
-    ["waiting", ["a"]], ["working", ["c"]], ["done", ["d"]], ["failed", ["e"]], ["resolved", ["b"]],
-  ]);
-  assert.deepEqual(groupThreads([th[2]]).map((g) => g.key), ["working"]);
-});
-t("merge dedupes and sorts", () => {
-  const a = { id: "cmsg_2", written_at: "2026-01-01T00:00:02Z" };
-  const b = { id: "cmsg_1", written_at: "2026-01-01T00:00:01Z" };
-  let r = mergeMessages([a], [b, a]);
-  assert.deepEqual(r.list.map((m) => m.id), ["cmsg_1", "cmsg_2"]);
-  assert.equal(r.added.length, 1);
-  r = mergeMessages(r.list, [a]);
-  assert.equal(r.added.length, 0);
-  assert.equal(lastId(r.list), "cmsg_2");
-});
-t("composer block reasons", () => {
-  assert.match(composerBlock({ enabled: false, supported: true }), /router is off/i);
-  assert.match(composerBlock({ enabled: true, supported: false, agent: "x" }), /no projects chat/);
-  assert.equal(composerBlock({ enabled: true, supported: true }), "");
+t("tasks leave notes out of the count and the bar", () => {
+  const c = tasksOf("# Plan\n✓ one\n✱ two\nnote");
+  assert.deepEqual(c.items.map((i) => i.state), ["done", "doing"]);
+  assert.deepEqual([c.total, c.done, c.doing], [2, 1, 1]);
 });
 
-// ── optimistic rows and the live timeline (js/timeline.js) ──────────────
-t("optimistic rows never become the stream cursor", () => {
-  const list = [{ id: "cmsg_5" }, { id: "local_zz" }];
-  assert.equal(lastId(list), "cmsg_5");
-});
-t("API rows map to the UI's authors", () => {
-  const base = { id: "cmsg_1", written_at: "2026-01-01T00:00:00Z", text: "hi" };
+// ── storm rows and the live timeline (js/timeline.js) ────────────────────
+t("storm rows map to the UI's authors (role ids)", () => {
+  const base = { id: "cmsg_a1", seq: 4, created_at: "2026-01-01T00:00:00Z", text: "hi", extra: {} };
   assert.equal(uiMsg({ ...base, author_kind: "owner", author_id: "owner" }).who, "you");
-  assert.equal(uiMsg({ ...base, author_kind: "agent", author_id: "coordinator" }).who, "coord");
+  assert.equal(uiMsg({ ...base, author_kind: "agent", author_id: "workspace-coordinator" }).who, "coord");
+  assert.equal(uiMsg({ ...base, author_kind: "agent", author_id: "project-coordinator" }).who, "coord");
   assert.equal(uiMsg({ ...base, author_kind: "agent", author_id: "thread" }).who, "agent");
-  assert.equal(uiMsg({ ...base, author_kind: "system", author_id: "system" }).who, "system");
-  const f = uiMsg({ ...base, author_kind: "owner", forwarded_from: { chat_id: "chat_workspace", message_id: "cmsg_0" } });
-  assert.deepEqual(f.fwd, { chatId: "chat_workspace", id: "cmsg_0" });
-  assert.equal(f.at, Date.parse(base.written_at));
+  assert.equal(uiMsg({ ...base, author_kind: "system", author_id: "xo" }).who, "system");
+  const f = uiMsg({ ...base, author_kind: "owner", author_id: "owner", extra: { forwarded_from: { chat_id: "chat_ws", message_id: "cmsg_0", via: ["workspace"] } } });
+  assert.deepEqual(f.fwd, { chatId: "chat_ws", id: "cmsg_0", via: ["workspace"] });
+  assert.equal(f.at, Date.parse(base.created_at));
+  assert.equal(f.seq, 4);
+  assert.equal(uiMsg({ ...base, author_kind: "system", author_id: "xo", reply_to: "cmsg_x" }).noOne, true);
+});
+t("rows merge by id and sort by seq (storm ids are not ordered)", () => {
+  const a = { id: "cmsg_ff", seq: 1 }, b = { id: "cmsg_00", seq: 2 }, c = { id: "cmsg_77", seq: 3 };
+  let { list, added } = mergeRows([c], [b, a]);
+  assert.deepEqual(list.map((r) => r.id), ["cmsg_ff", "cmsg_00", "cmsg_77"]);
+  assert.equal(added.length, 2);
+  ({ list, added } = mergeRows(list, [{ id: "cmsg_00", text: "again" }]));
+  assert.equal(added.length, 0);
+  assert.equal(list.find((r) => r.id === "cmsg_00").seq, 2, "a frame without seq keeps the known seq");
 });
 t("an optimistic row is matched to its server echo once", () => {
   const now = Date.parse("2026-01-01T00:00:10Z");
@@ -119,18 +104,18 @@ t("ask titles come from the first sentence, plain text", () => {
   assert.ok(long.title.length <= 140 && long.title.endsWith("…"));
   assert.equal(plainText("```js\ncode\n```\n# Head"), "Head");
 });
-t("live asks: question, no options, reply only, keyed by card epoch", () => {
-  const th = { id: "cmsg_t", state: "needs_reply", epoch: 3, happened: "card text" };
-  const [a] = liveAsks(th, "Which provider should I use? SendGrid or SES.");
-  assert.equal(a.kind, "question");
-  assert.equal(a.options, null);
-  assert.equal(a.replyOnly, true);
-  assert.equal(a.title, "Which provider should I use?");
-  assert.equal(a.id, "cmsg_t:3");
-  assert.notEqual(liveAsks({ ...th, epoch: 4 }, "Which provider should I use?")[0].id, a.id);
-  assert.equal(liveAsks({ ...th, epoch: null, cardAt: "2026-01-01" }, "")[0].title, "card text");
-  assert.deepEqual(liveAsks({ ...th, state: "working" }, "x"), []);
-  assert.equal(liveAsks({ ...th, state: "needs_approval" }, "Run it?")[0].replyOnly, false);
+t("storm asks: review items first, then needs_reply in words, paused, a pending approval", () => {
+  const th = { id: "cmsg_t", state: "needs_reply", lastAt: 5, card: { needs_you: "Which provider should I use? SendGrid or SES.", updated_at: "u1" } };
+  const [a] = stormAsks(th);
+  assert.deepEqual([a.kind, a.options, a.replyOnly, a.title, a.id], ["question", null, true, "Which provider should I use?", "cmsg_t:u1"]);
+  assert.notEqual(stormAsks({ ...th, card: { ...th.card, updated_at: "u2" } })[0].id, a.id);
+  assert.deepEqual(stormAsks({ ...th, state: "working" }), []);
+  const item = { id: "rv_1", kind: "permission", title: "Run `npm install`", why: "needs a package", risk: "notable", risk_reasons: ["network"], blocking: true, state: "open" };
+  const [b] = stormAsks({ ...th, state: "needs_approval" }, [item]);
+  assert.deepEqual([b.id, b.kind, b.risk, b.item === item, b.replyOnly], ["rv_1", "permission", "notable", true, undefined]);
+  assert.equal(stormAsks({ ...th, state: "needs_approval" })[0].pending, true);
+  const [p] = stormAsks({ ...th, state: "paused", paused: "stuck on a denied step" });
+  assert.match(p.detail, /stuck on a denied step/);
 });
 t("thread cards sit under the coordinator's reply to the root, else alone", () => {
   const rows = [{ id: "r1", who: "you" }, { id: "c1", who: "coord" }, { id: "r2", who: "you" }, { id: "r3", who: "you" }, { id: "x", who: "you" }];
@@ -148,23 +133,30 @@ t("@project targets: only a known project is stripped", () => {
   assert.equal(stripTarget("@billing-api.x keep", "billing-api"), "@billing-api.x keep");
   assert.equal(stripTarget("no token", null), "no token");
 });
-t("send errors and connection lines are honest", () => {
-  assert.equal(sendErrorTitle({ code: "router_off", status: 409 }), "Router is off");
-  assert.equal(sendErrorTitle({ status: 501 }), "Not supported by this backend");
+t("send errors say what happened, in plain words", () => {
+  assert.equal(sendErrorTitle({ code: "router_off", status: 409 }), "The router is off");
+  assert.equal(sendErrorTitle({ code: "chat_retired", status: 409 }), "This project was removed");
+  assert.equal(sendErrorTitle({ code: "engine_not_running", status: 503 }), "XO's chat engine isn't running");
+  assert.equal(sendErrorTitle({ status: 501 }), "Not supported by this agent");
   assert.equal(sendErrorTitle({ status: 403 }), "Refused by the proxy");
   assert.equal(sendErrorTitle({ status: 502 }), "Can't reach XO");
   assert.equal(sendErrorTitle({ status: 400 }), "Message not sent");
-  const ok = { enabled: true, supported: true, agent: "a" };
-  assert.equal(connLine(ok, null, null), null);
-  assert.equal(connLine(null, "down", null).kind, "down");
-  assert.equal(connLine(ok, null, "chats failed").kind, "down");
-  assert.match(connLine({ ...ok, enabled: false }).text, /router is off/i);
-  assert.match(connLine({ ...ok, supported: false }).text, /no projects chat/);
 });
-t("awaiting expires after 3 minutes", () => {
-  assert.equal(awaitingNow({ at: 1000 }, 1000 + 60000), true);
-  assert.equal(awaitingNow({ at: 1000 }, 1000 + 181000), false);
-  assert.equal(awaitingNow(null), false);
+t("the connection line and the send block are honest", () => {
+  const rt = [{ name: "claude_code", cli: { logged_in: true } }];
+  const ok = { loaded: true, conn: "live", runtimes: rt, router: { mode: "agent" }, pools: {} };
+  assert.equal(connLine(ok), null);
+  assert.equal(sendBlock(ok), "");
+  assert.equal(connLine({ ...ok, error: "x" }).kind, "down");
+  assert.equal(connLine({ ...ok, conn: "down" }).kind, "down");
+  assert.match(connLine({ ...ok, statusError: "x", statusCode: "engine_not_running" }).text, /engine isn't running/);
+  assert.match(connLine({ ...ok, runtimes: [{ name: "claude_code", cli: { logged_in: false } }] }).text, /Claude isn't connected/);
+  assert.equal(sendBlock({ ...ok, runtimes: [{ name: "claude_code", cli: { logged_in: false } }] }), "Claude isn't connected");
+  assert.match(connLine({ ...ok, router: { mode: "off" } }).text, /router is off/);
+  assert.equal(sendBlock({ ...ok, router: { mode: "off" } }, { timeline: false }), "", "threads still take replies");
+  assert.match(connLine({ ...ok, pools: { p: { state: "closed", resets_at: "2026-10-21T14:05:00Z" } } }).text, /^Paused until /);
+  assert.equal(connLine({ ...ok, pools: { p: { state: "warn" } } }), null, "warn only holds later work: no line");
+  assert.equal(sendBlock({ ...ok, loaded: false }), "Connecting to XO…");
 });
 await (async () => {
   let peak = 0, now = 0;
@@ -172,55 +164,38 @@ await (async () => {
   t("mapLimit caps parallel fetches", () => assert.equal(peak, 3));
 })();
 
-// ── live data (GET only) ────────────────────────────────────────────────
-const BASE = (process.env.XO_UI || "http://127.0.0.1:5180") + "/api/projects-chat";
+// ── live data from storm (GET only: this suite never writes) ─────────────
+const BASE = (process.env.XO_UI || "http://127.0.0.1:5180") + "/api/chat";
 const get = async (p) => {
-  const r = await fetch(BASE + p); // GET only: this suite never writes
+  const r = await fetch(BASE + p); // GET only
   if (!r.ok) throw new Error(`${p}: ${r.status}`);
   return r.json();
 };
-
 try {
-  const status = await get("/status");
   const { chats } = await get("/chats");
-  t("status gates the composer like classic", () => {
-    assert.equal(composerBlock(status, null), status.enabled && status.supported ? "" : composerBlock(status, null));
-    assert.ok(chats[0].chat === "workspace");
+  const runtimes = (await get("/runtimes")).runtimes;
+  t(`storm: ${chats.length} chats, the workspace first; ${runtimes.length} runtime(s) with a feature list`, () => {
+    assert.equal(chats[0].kind, "workspace");
+    for (const c of chats) assert.match(c.id, /^chat_/);
+    for (const r of runtimes) assert.ok(r.features && r.features.features, r.name);
   });
-  const projectMsgs = {};
+  let threadsSeen = 0;
   for (const c of chats) {
-    const { messages } = await get(`/chats/${c.chat}/messages?limit=40`);
-    const { threads } = await get(`/chats/${c.chat}/threads`);
-    if (c.kind === "project") projectMsgs[c.chat] = (await get(`/chats/${c.chat}/messages?limit=300`)).messages;
-    const rows = messages.map(uiMsg);
-    t(`${c.chat}: timeline maps (${messages.length} msgs, ${threads.length} threads)`, () => {
-      for (const m of rows) assert.ok(["you", "coord", "agent", "system"].includes(m.who) && Number.isFinite(m.at) && m.id);
-      const { on, alone } = threadAnchors(rows, threads.map((x) => x.ts));
-      const placed = new Set([...alone, ...[...on.values()].flat()]);
-      for (const th of threads) if (messages.some((m) => m.id === th.ts)) assert.ok(placed.has(th.ts), `thread ${th.ts} has a card`);
+    const m = await get(`/chats/${c.id}/messages?before_seq=9007199254740991&limit=40`);
+    const { threads } = await get(`/chats/${c.id}/threads`);
+    threadsSeen += threads.length;
+    const rows = m.messages.map(uiMsg);
+    t(`${c.project || "workspace"}: timeline maps by seq (${rows.length} msgs, ${threads.length} threads)`, () => {
+      for (let i = 1; i < rows.length; i++) assert.ok(rows[i].seq > rows[i - 1].seq, "oldest first");
+      for (const r of rows) assert.ok(["you", "coord", "agent", "system"].includes(r.who) && Number.isFinite(r.at) && r.id);
+      for (const th of threads) {
+        assert.ok(["working", "needs_reply", "needs_approval", "done", "failed", "resolved", "paused"].includes(th.state), th.state);
+        parseChecklist(th.status_md || "");
+        stormAsks({ id: th.ts, state: th.state, card: th.card, lastAt: 0 });
+      }
     });
-    for (const th of threads) {
-      const d = await get(`/chats/${c.chat}/threads/${th.ts}`);
-      t(`${c.chat}: thread ${th.ts} detail`, () => {
-        const c2 = parseChecklist(d.status);
-        if ((d.status || "").includes("✓")) assert.ok(c2.done > 0);
-        assert.equal(typeof d.busy, "boolean");
-        const msgs = d.messages.map(uiMsg);
-        assert.ok(msgs.every((m) => m.who !== "you" || m.text));
-        const st = threadState({ ...d.thread, card: d.card });
-        const asks = liveAsks({ id: th.ts, state: st, epoch: d.card?.epoch, happened: d.card?.happened }, [...msgs].reverse().find((m) => m.who === "agent")?.text);
-        if (st === "needs_reply") assert.ok(asks.length === 1 && asks[0].title && !/Open the thread/.test(asks[0].title));
-        else assert.equal(asks.length, 0);
-      });
-    }
   }
-  const ws = (await get("/chats/workspace/messages")).messages;
-  t("workspace: routed index points at real workspace messages", () => {
-    const idx = routedIndex(projectMsgs);
-    const found = Object.keys(idx).filter((id) => ws.some((m) => m.id === id));
-    for (const id of found) for (const r of idx[id]) assert.ok(projectMsgs[r.chat].some((m) => m.id === r.messageId));
-    console.log(`      routed index: ${Object.values(idx).flat().length} forwarded copies, ${found.length} in the workspace timeline`);
-  });
+  console.log(`      ${threadsSeen} thread(s) across the chats`);
 } catch (e) {
   console.error("live data unavailable:", e.message);
   process.exitCode = 1;

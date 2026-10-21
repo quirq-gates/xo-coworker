@@ -1464,3 +1464,89 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .target .tg-warn svg{color:var(--warn)}
 .hr-conn .hr-t{color:var(--ink)}
 .hr-conn.k-down{border-color:rgb(230 131 136 / .3)}
+
+/* ── storm's turns: the server's blocks, laid out quietly (ch 09 §2) ─────────
+   Work folds by default; a running turn shows its current row. Blue = working,
+   amber = waiting on you, red = failed; everything else neutral ink. */
+.m-turn{margin-bottom:14px}
+.turn{display:flex;flex-direction:column;gap:6px;max-width:66ch}
+.tb-h{display:flex;align-items:center;gap:8px;width:100%;min-height:30px;padding:4px 8px 4px 6px;margin-left:-6px;border-radius:9px;text-align:left;font-size:var(--fs-base);color:var(--ink-3);transition:background var(--dur-fast),color var(--dur-fast)}
+.tb-h:not(:disabled):hover{background:var(--row-hover);color:var(--ink-2)}
+.tb-h:disabled{cursor:default}
+.tb-hi{flex:none;display:grid;place-items:center;width:16px;height:16px;color:var(--ink-4)}
+.tb-hi svg{width:14px;height:14px}
+.tb-ht{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tb-ht code,.tb-rl code{font:500 .92em var(--mono);color:var(--ink-2)}
+.tb-n{flex:none;font-size:var(--fs-xs);color:var(--ink-4);font-variant-numeric:tabular-nums}
+.tb-chev{flex:none;display:grid;place-items:center;color:var(--ink-4);transition:transform var(--dur-base) var(--glide)}
+.tb-chev svg{width:13px;height:13px}
+.tb-h[aria-expanded="true"] .tb-chev{transform:rotate(180deg)}
+.tb.is-live .tb-hi,.tb-spin{color:var(--info)}
+.tb-spin{width:10px;height:10px}
+.tb-act.is-waiting .tb-h{color:var(--warn)}
+.tb-steps{margin:2px 0 6px 24px;padding-left:12px;border-left:1px solid var(--g26);list-style:none;display:flex;flex-direction:column;gap:6px;font-size:var(--fs-base);line-height:1.55;color:var(--ink-3)}
+.tb-rows{list-style:none;margin:2px 0 4px 24px;display:flex;flex-direction:column;gap:1px}
+.tb-rows.is-cur{margin-top:0}
+.tb-rh{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:3px 8px 3px 6px;margin-left:-6px;border-radius:8px;text-align:left;font-size:var(--fs-base);color:var(--ink-2)}
+.tb-rh.is-btn:hover{background:var(--row-hover)}
+.tb-ri{flex:none;display:grid;place-items:center;width:16px;color:var(--ink-4)}
+.tb-ri svg{width:13px;height:13px}
+.tb-rl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tb-rp{flex:none;font-size:var(--fs-xs);color:var(--ink-4);font-variant-numeric:tabular-nums}
+.tb-m{flex:none;display:grid;place-items:center;width:16px;height:16px;font-size:9px}
+.tb-m svg{width:12px;height:12px}
+.tb-m.is-ok{color:var(--ink-4)}
+.tb-m.is-err{color:var(--err-ink)}
+.tb-m.is-den{color:var(--ink-3)}
+.tb-m.is-wait{width:8px;height:8px;margin:0 4px;background:var(--warn);border-radius:1.5px;transform:rotate(45deg) scale(.86)}
+.tb-row.s-error .tb-rl{color:var(--err-ink)}
+.tb-row.is-waiting .tb-rl{color:var(--warn)}
+.tb-row.is-pending .tb-rl{color:var(--ink-3)}
+.tb-rb{margin:2px 0 8px 22px;display:flex;flex-direction:column;gap:6px}
+.tb-cmd{display:block;font:500 12px/1.5 var(--mono);color:var(--ink-2);overflow-wrap:anywhere}
+.tb-out{margin:0;max-height:240px;overflow:auto;padding:10px 12px;border-radius:10px;background:var(--g17);border:1px solid var(--g23);font:400 12px/1.55 var(--mono);color:var(--ink-2);white-space:pre-wrap;overflow-wrap:anywhere;scrollbar-width:thin;scrollbar-color:var(--g2A) transparent}
+.tb-note{font-size:var(--fs-sm);color:var(--ink-4)}
+.tb-plan-l{list-style:none;margin:2px 0 6px 24px;display:flex;flex-direction:column;gap:5px}
+.tb-plan-l .ck{font-size:var(--fs-base)}
+.tb-narr{font-size:var(--fs-md);color:var(--ink-2)}
+.tb-text.is-live{color:var(--ink-2)}
+.tb-files{margin-top:4px}
+.tb-fh{display:flex;align-items:center;gap:8px;font-size:var(--fs-base);color:var(--ink-3)}
+.tb-fh svg{width:14px;height:14px;color:var(--ink-4)}
+.tb-fl{list-style:none;display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.tb-file{display:flex;align-items:center;gap:9px;min-width:0;max-width:100%;height:44px;padding:0 14px 0 10px;border-radius:12px;background:var(--surface);border:1px solid var(--g26)}
+.tb-fi{flex:none;display:grid;place-items:center;width:26px;height:26px;border-radius:8px;background:var(--g1C);color:var(--ink-3)}
+.tb-fi svg{width:14px;height:14px}
+.tb-fn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:550 var(--fs-base)/1.2 var(--sans);color:var(--ink)}
+.tb-fm{flex:none;font-size:var(--fs-xs);color:var(--ink-4)}
+.tb-end{display:flex;align-items:center;gap:7px;font-size:var(--fs-sm);color:var(--ink-4)}
+.tb-end svg{width:12px;height:12px}
+.tb-end.is-err{color:var(--err-ink)}
+.tb-end.is-stop{color:var(--ink-3)}
+
+/* paused: it waits on you (shape: an outlined diamond, amber) */
+.g-paused{border:1.6px solid var(--warn);border-radius:1.5px;transform:rotate(45deg) scale(.8)}
+.st-paused{--st:var(--warn)}
+
+/* a thread's own header: its label, Resolve / Reopen (R1), rename and label */
+.tw-label{flex:none;display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:7px;background:var(--g1E);border:1px solid var(--g26);font:500 var(--fs-sm)/1 var(--sans);color:var(--ink-2);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tw-acts{position:relative;flex:none;display:flex;align-items:center;gap:6px}
+.tw-act{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 11px 0 9px;border-radius:9px;border:1px solid var(--g26);color:var(--ink-2);font:500 var(--fs-base)/1 var(--sans);transition:background var(--dur-fast),border-color var(--dur-fast),color var(--dur-fast),transform 90ms var(--press)}
+.tw-act svg{width:14px;height:14px}
+.tw-act:hover{background:var(--g1A);border-color:var(--g33);color:var(--ink)}
+.tw-act:active{transform:scale(.97)}
+.tw-more{width:30px;padding:0;justify-content:center}
+.tw-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:20;display:flex;flex-direction:column;min-width:180px;padding:6px;border-radius:var(--r-lg);border:1px solid var(--pop-line);background:var(--pop-bg);box-shadow:0 18px 40px var(--pop-shadow);animation:msg-in .16s var(--glide)}
+.tw-menu button{height:36px;padding:0 10px;border-radius:9px;text-align:left;font-size:var(--fs-base);color:var(--ink-2)}
+.tw-menu button:hover,.tw-menu button:focus-visible{background:var(--bg-3);color:var(--ink)}
+.tw-in{flex:1;min-width:0;height:34px;padding:0 10px;border-radius:9px;border:1px solid var(--comp-line-hi);background:var(--surface);font:600 17px/1 var(--sans);color:var(--ink)}
+.tw-in-l{flex:0 1 200px;font:500 var(--fs-base)/1 var(--sans)}
+.tw-in:focus{outline:2px solid rgba(var(--accent-rgb),.75);outline-offset:1px}
+.ar-l{flex:none;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 7px;height:20px;line-height:20px;border-radius:6px;background:var(--g1E);font-size:var(--fs-xs);color:var(--ink-3)}
+.hr-conn.k-wait .hr-t{color:var(--warn)}
+@media (max-width:760px){
+  .tw-act span{display:none}
+  .tw-act{width:36px;height:36px;padding:0;justify-content:center}
+  .tb-rows,.tb-steps,.tb-plan-l{margin-left:14px}
+  .tw-label{max-width:110px}
+}

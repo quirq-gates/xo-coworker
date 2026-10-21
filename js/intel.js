@@ -92,14 +92,16 @@ export function createIntel({ world, PROJ, params, onChange, record }) {
     return { model: "sonnet", depth: 2, why: "code changes with tests", by };
   }
 
-  // ── live: only what the backend really reports (GET /status). No invented router pick, no pins (R6). ──
+  // ── live: only what storm reports (the Space router and the chat's own override). No invented pick. ──
   function liveInfo(session) {
-    const st = world.state.status;
-    const level = kindOf(session) === "workspace" ? "workspace" : "project";
-    const m = st && st.modes ? st.modes[level] : null;
-    const dm = st && st.decision_model ? String(st.decision_model) : null;
-    const routedBy = m === "agent" || !m ? "Router" : cap(String(m));
-    return { st, level, mode: m, dm, routedBy };
+    const st = world.state.router;
+    const pid = session === "ws" ? "workspace" : session.startsWith("p:") ? session.slice(2) : world.thread(session.slice(2))?.project;
+    const chat = world.state.projects.find((p) => p.id === pid);
+    const r = (chat && chat.routing) || st || null;
+    const m = r ? r.mode : null;
+    const dm = r && r.mode === "decision" && r.decision_model ? String(r.decision_model) : null;
+    const routedBy = !m || m === "agent" ? "Router" : m === "off" ? "Off" : cap(dm || "decision");
+    return { st, level: kindOf(session), mode: m, dm, routedBy, agent: (world.state.runtimes || [])[0]?.name || null };
   }
   function liveChip(session, phone) {
     const i = liveInfo(session);
@@ -120,7 +122,7 @@ export function createIntel({ world, PROJ, params, onChange, record }) {
       (i.st
         ? `<p class="iq-now">${scope}</p>` +
           (i.dm ? `<p class="iq-now">Decision model: <b>${esc(i.dm)}</b>.</p>` : "") +
-          `<p class="iq-rl">Agent: ${esc(i.st.agent || "unknown")}${i.st.max_turns ? ` · up to ${esc(i.st.max_turns)} turns a message` : ""}.</p>`
+          (i.agent ? `<p class="iq-rl">Agent: ${esc(i.agent)}.</p>` : "")
         : `<p class="iq-now">Waiting for XO's status…</p>`) +
       `<footer class="iq-f"><span>Choosing a model here needs the backend's intelligence API (R6). Nothing is changed from this panel yet.</span></footer>`;
     place();
