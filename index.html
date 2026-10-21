@@ -108,7 +108,9 @@
             <button type="button" role="tab" data-set="sounds" aria-selected="false">Sounds</button>
             <button type="button" role="tab" data-set="keys" aria-selected="false">Keyboard</button>
           </nav>
-          <div class="set-page" role="tabpanel" data-page="general"><h2>General</h2><p class="set-empty"><b>Nothing to set yet.</b> General settings arrive here once the backend can keep them.</p></div>
+          <div class="set-page" role="tabpanel" data-page="general"><h2>General</h2>
+            <div class="set-row"><div class="set-l"><b id="hops-l">Show how messages travel</b><span>Inside a thread, a quiet line each time a message passes between the workspace, a project's coordinator and the thread. Off unless you turn it on.</span></div><button type="button" class="switch" id="hops-tog" role="switch" aria-checked="false" aria-labelledby="hops-l"><span class="th-track" aria-hidden="true"><span class="th-knob"></span></span></button></div>
+          </div>
           <div class="set-page" role="tabpanel" data-page="appearance" hidden><h2>Appearance</h2><p class="set-empty"><b>Nothing to set yet.</b> Appearance settings arrive here once the backend can keep them.</p></div>
           <div class="set-page" role="tabpanel" data-page="routing" hidden><h2>Routing</h2><div class="set-live"></div></div>
           <div class="set-page" role="tabpanel" data-page="rules" hidden><h2>Rules</h2><div class="set-live"></div></div>

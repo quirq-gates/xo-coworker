@@ -66,6 +66,7 @@ const S = {
   view: "home",            // home | ws | p:<project> | t:<thread>
   parent: {}, opener: {}, scroll: {},
   dockFold: {},
+  showHops: (() => { try { return localStorage.getItem("cv-hops") === "1"; } catch { return false; } })(),
   tbOpen: {},              // storm blocks opened by the person (by block id, or row:<call id>)
   tEdit: null,             // a thread header field being edited: {tid, field: "title"|"label"}
   recording: null, keyErr: null,  // Settings › Keyboard: the action waiting for a new key, and why the last one was refused            // asks folded away in their thread so you can read it first (by ask key)
@@ -677,6 +678,14 @@ function liveMessagesOf(conv) {
       out.push({ key: `turn:${tu.id}`, at: Date.parse(tu.at) || Date.now(), seq: tu.seq, who: "turn", turn: tu, blocks, hideAnswer: said });
     }
   }
+  // how messages travelled to and from this thread (11 §16): hidden by default, shown by choice
+  if (t && S.showHops && st.hops) {
+    for (const hp of st.hops.values()) {
+      if (hp.thread_ts !== t.id) continue;
+      const text = hopLine(hp, t);
+      if (text) out.push({ key: `hop:${hp.id}`, at: Date.parse(hp.at || hp.created_at) || 0, seq: hp.seq ?? null, who: "system", text });
+    }
+  }
   // the coordinator's turn for your message failed: say so where you'll look (GitHub #30)
   const fail = !t && chat ? st.failed && st.failed[chat] : null;
   if (fail) out.push({ key: `fail:${fail.id}`, at: fail.at, who: "event", tone: "stop", text: `The coordinator couldn't answer: ${fail.error}` });
@@ -698,6 +707,21 @@ function liveMessagesOf(conv) {
   return merged;
 }
 
+/** One hop as a quiet line (11 §16.2's labels). Their content stays theirs: we say who, not what. */
+function hopLine(h, t) {
+  const via = h.via || [];
+  const state = h.state === "sent" ? " · not taken up yet" : h.state === "answered" ? " · answered" : "";
+  const pc = `${PROJ(t.project)} coordinator`;
+  switch (h.kind) {
+    case "brief": return `${via.includes("workspace") ? "Forwarded by the workspace, via the project" : `From the ${pc}`}${state}`;
+    case "relay": return `The ${pc} passed on your message${state}`;
+    case "ask": return h.from_role === "thread" ? `Asked the ${pc}${state}` : h.to_role === "workspace-coordinator" ? `Asked the workspace on behalf of this thread${state}` : `The ${pc} asked this thread${state}`;
+    case "status": return `Reported back to the ${pc}${state}`;
+    case "answer": return h.to_role === "thread" ? `The ${pc} answered` : `Answered the ${pc}`;
+    case "forward": return `Forwarded by the workspace${state}`;
+    default: return "";
+  }
+}
 function messagesOf(conv, needs) {
   if (!DEMO) return liveMessagesOf(conv);
   const out = [];
@@ -778,7 +802,7 @@ function msgItems(conv, needs) {
       else if (m === lastYou && (m.status === "sent" || m.sent)) meta = `<div class="meta"><time>${clock(m.at)}</time><span class="sent">Sent ${ICON.check}</span></div>`;
       let route = "";
       if (m.waiting) route = `<div class="route-row"><i class="dash" aria-hidden="true"></i>Sent to <b>${esc(m.target === "workspace" ? "the coordinator" : PROJ(m.target))}</b> · waiting for a thread</div>`;
-      else if (m.fwd) route = `<div class="route-row">${ICON.arrow}<span>Forwarded from the <button type="button" class="rt-go" data-go="ws"><b>Workspace</b></button></span></div>`;
+      else if (m.fwd) route = `<div class="route-row">${ICON.arrow}<span>Forwarded by the <button type="button" class="rt-go" data-go="ws"><b>Workspace</b></button>${(m.fwd.via || []).length > 1 ? ", via the project" : ""}</span></div>`;
       else if (m.routed && m.routed.length) route = `<div class="route-row">${ICON.arrow}<span>Routed to ${[...new Set(m.routed.map((r) => r.chat))].map((c) => `<button type="button" class="rt-go" data-go="p:${esc(c)}"><b>${esc(PROJ(c))}</b></button>`).join(", ")}</span></div>`;
       html = `<div class="m m-you${cont ? " cont" : ""}${m.status === "failed" ? " is-failed" : ""}${m.status === "sending" ? " is-pending" : ""}"><div class="bubble" title="${esc(clock(m.at))}">${esc(m.text)}</div>${meta}${route}</div>`;
     } else if (m.who === "coord" || m.who === "agent") {
@@ -1730,6 +1754,7 @@ function follow() {
   if (DEMO) return;
   const v = S.view, t = convThread(v);
   if (CH.isChats(v)) { world.act.watch([]); world.act.watchThread(null); CH.open(v); return; }
+  if (t && S.showHops && world.act.loadHops) world.act.loadHops(t.id);
   world.act.watch(v === "home" || v === "ws" ? ["workspace"] : v.startsWith("p:") ? [v.slice(2)] : t ? [t.project] : []);
   world.act.watchThread(t ? t.id : null);
 }
@@ -2102,6 +2127,17 @@ jump.addEventListener("mousedown", (e) => { if (e.target === jump) closeJump(); 
 const keys = $("#keys");
 function soundRender() { $("#sound-tog").setAttribute("aria-checked", String(sound.on)); }
 $("#sound-tog").addEventListener("click", () => { sound.on = !sound.on; soundRender(); sound.play("allow"); });
+function hopsRender() { const b = $("#hops-tog"); b.setAttribute("aria-checked", String(!!S.showHops)); if (!b.querySelector(".th-knob svg")) b.querySelector(".th-knob").innerHTML = ICON.router; }
+$("#hops-tog").addEventListener("click", () => {
+  S.showHops = !S.showHops;
+  try { localStorage.setItem("cv-hops", S.showHops ? "1" : "0"); } catch { /* private */ }
+  hopsRender();
+  const t = convThread(S.view);
+  if (S.showHops && t && world.act.loadHops) world.act.loadHops(t.id);
+  announce(S.showHops ? "Showing how messages travel." : "Hiding how messages travel.");
+  schedule();
+});
+hopsRender();
 keys.addEventListener("click", (e) => { if (e.target === keys || e.target.closest("[data-close]")) closeKeys(); });
 let keysReturn = null;
 function openKeys() { keysSheetRender(); keysReturn = document.activeElement; keys.hidden = false; keys.querySelector("[data-close]").focus(); }

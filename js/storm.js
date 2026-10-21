@@ -43,6 +43,7 @@ export function stormSource(state, emit, event) {
     routed: {},      // workspace message id → [{chat: project id}]
     review: new Map(), // open review items by id
     runs: new Map(),   // sub-agent runs seen on the stream (run_… → summary), live list and log (ch 14 §11)
+    hops: new Map(),   // hop id → hop (11 §16): how a message travelled; shown only by choice
     liveRuns: {},      // session → {running, waiting, tokens} from the live `runs` frames
     turns: createTurns(),
     lastSeq: 0,
@@ -441,7 +442,12 @@ export function stormSource(state, emit, event) {
         soon();
         break;
       }
-      case "hop": soon(); break;
+      case "hop": {
+        // creation: the hop without its note; a state move: {id, state}
+        const old = state.hops.get(d.id);
+        if (old || d.kind) { state.hops.set(d.id, { ...(old || {}), ...d, seq: (old && old.seq) ?? env.seq ?? null, at: (old && old.at) || env.ts }); emitSoon(); }
+        break;
+      }
       case "chat": {
         // a creation carries `kind` (UI-reference §4.10): add it from the event, no re-listing
         if (d.kind) {
@@ -710,6 +716,12 @@ export function stormSource(state, emit, event) {
         const chat = chatIdOf(project);
         const s = Object.values(state.sessions).find((x) => x.chat_id === chat && COORD.has(x.role) && !x.retired_at && BUSY.has(x.state));
         return s ? s.id : null;
+      },
+      /** A thread's hops (how messages travelled to and from it), read once when they're shown. */
+      loadHops: async (ts) => {
+        const r = rawThreads.get(ts);
+        if (!r) return;
+        try { const d = await api.hops(r.chat_id, { thread: ts, before_seq: NEWEST, limit: 200 }); for (const h of d.hops || []) state.hops.set(h.id, { ...(state.hops.get(h.id) || {}), ...h, at: h.created_at }); emitSoon(); } catch { /* the stream's hops still arrive */ }
       },
       /** A session's recent turns, read from its stored frames (a plain chat's work, a thread's). */
       loadTurns: async (sid) => { await loadTurns(sid); emitSoon(); },
