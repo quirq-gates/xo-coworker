@@ -124,7 +124,7 @@ export function stormSource(state, emit, event) {
       const h = hostOf(it);
       if (!h) continue;
       const project = h.chat ? projectOf(h.chat) : "workspace";
-      const host = hosts.get(h.id) || { id: h.id, host: true, project: project || "workspace", chatId: h.chat, title: h.title || (project === "workspace" || !project ? "Workspace" : project),
+      const host = hosts.get(h.id) || { id: h.id, host: true, project: project || "workspace", chatId: h.chat, plainSession: h.session || null, title: h.title || (project === "workspace" || !project ? "Workspace" : project),
         state: "needs_approval", checklist: { items: [], total: 0, done: 0, doing: 0 }, messages: [], asks: [], live: true, loaded: true, busy: false,
         createdAt: Date.parse(it.created_at) || Date.now(), lastAt: Date.parse(it.created_at) || Date.now(), card: {} };
       host.asks.push(...stormAsks(host, [it]));

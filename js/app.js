@@ -139,7 +139,7 @@ const D = createDecisions({
   onOpenThread: (tid) => {
     // an item hosted by a chat (no thread) opens that conversation; one hosted by the account has no page yet
     const h = (world.state.hosts || []).find((x) => x.id === tid);
-    if (h) { if (h.chatId) go(convOfChat(h.project), { keepPanel: true }); else heraldShow({ kind: "calm", text: "It isn't tied to a conversation", sub: h.title }, 3600); return; }
+    if (h) { if (h.chatId) go(convOfChat(h.project), { keepPanel: true }); else if (h.plainSession) go("c:" + h.plainSession); else heraldShow({ kind: "calm", text: "It isn't tied to a conversation", sub: h.title }, 3600); return; }
     go("t:" + tid, { keepPanel: true });
   },
   onAllClear: (summary) => { setTimeout(() => heraldShow({ kind: "clear", text: "All clear", sub: summary }, 4600), RM.matches ? 0 : 900); },
@@ -347,7 +347,7 @@ function nextCardHtml(n) {
     `<div class="nx-in">` +
     `<div class="nx-meta"><span class="eff e-${n.effort}">${dial(n.effort)}<b>${E.label}</b><span>${E.time}</span></span>` +
     (n.risk === "destructive" ? `<span class="risk r-destructive">${ICON.lock}Destructive</span>` : n.group === "stopped" ? `<span class="risk r-stopped">Stopped</span>` : "") +
-    (t.host ? `<button type="button" class="nx-where" data-fid="where"${t.chatId ? ` data-go="${esc(convOfChat(t.project))}"` : ""} title="Where it was asked">${esc(t.title)}</button></div>` : `<button type="button" class="nx-where" data-fid="where" data-go="t:${esc(t.id)}" title="Open the thread">${esc(PROJ(t.project))}<span aria-hidden="true">›</span>${esc(t.title)}</button></div>`) +
+    (t.host ? `<button type="button" class="nx-where" data-fid="where"${t.chatId ? ` data-go="${esc(convOfChat(t.project))}"` : t.plainSession ? ` data-go="c:${esc(t.plainSession)}"` : ""} title="Where it was asked">${esc(t.title)}</button></div>` : `<button type="button" class="nx-where" data-fid="where" data-go="t:${esc(t.id)}" title="Open the thread">${esc(PROJ(t.project))}<span aria-hidden="true">›</span>${esc(t.title)}</button></div>`) +
     `<h2 class="nx-h" id="nx-h">${head}</h2>` +
     (estLine(n) ? `<p class="nx-est" title="${n.t.live ? "From its checklist: the steps not done yet." : "An estimate: the steps left that wait on this answer × a typical step time."}">${ICON.hourglass}${esc(estLine(n))}</p>` : "") +
     (n.sug ? `<p class="c-sug" title="${esc(n.sug.why)}">${ICON.spark}<span>Suggests <b>${esc(n.sug.label)}</b></span><em>${esc(n.sug.sure)}</em></p>` : "") +

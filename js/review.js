@@ -123,6 +123,6 @@ export function hostOf(item) {
   if (item.thread_ts) return null;
   if (item.kind === "usage") return { id: `pool:${(item.detail && item.detail.pool) || "account"}`, chat: null, title: "Your agent account" };
   if (item.chat_id) return { id: `chat:${item.chat_id}`, chat: item.chat_id, title: null };
-  if (item.session_id) return { id: `session:${item.session_id}`, chat: null, title: "A plain chat" };
+  if (item.session_id) return { id: `session:${item.session_id}`, chat: null, session: item.session_id, title: "A plain chat" };
   return { id: `item:${item.id}`, chat: null, title: "XO" };
 }
