@@ -100,12 +100,18 @@
           <nav class="set-nav" aria-label="Settings" role="tablist">
             <button type="button" role="tab" data-set="general" aria-selected="true">General</button>
             <button type="button" role="tab" data-set="appearance" aria-selected="false">Appearance</button>
+            <button type="button" role="tab" data-set="routing" aria-selected="false">Routing</button>
+            <button type="button" role="tab" data-set="rules" aria-selected="false">Rules</button>
+            <button type="button" role="tab" data-set="worktrees" aria-selected="false">Worktrees</button>
             <button type="button" role="tab" data-set="night" aria-selected="false">Night mode</button>
             <button type="button" role="tab" data-set="sounds" aria-selected="false">Sounds</button>
             <button type="button" role="tab" data-set="keys" aria-selected="false">Keyboard</button>
           </nav>
           <div class="set-page" role="tabpanel" data-page="general"><h2>General</h2><p class="set-empty"><b>Nothing to set yet.</b> General settings arrive here once the backend can keep them.</p></div>
           <div class="set-page" role="tabpanel" data-page="appearance" hidden><h2>Appearance</h2><p class="set-empty"><b>Nothing to set yet.</b> Appearance settings arrive here once the backend can keep them.</p></div>
+          <div class="set-page" role="tabpanel" data-page="routing" hidden><h2>Routing</h2><div class="set-live"></div></div>
+          <div class="set-page" role="tabpanel" data-page="rules" hidden><h2>Rules</h2><div class="set-live"></div></div>
+          <div class="set-page" role="tabpanel" data-page="worktrees" hidden><h2>Worktrees</h2><div class="set-live"></div></div>
           <div class="set-page" role="tabpanel" data-page="night" hidden><h2>Night mode</h2><p class="set-empty"><b>Nothing to set yet.</b> Night mode settings arrive here once the backend can keep them.</p></div>
           <div class="set-page" role="tabpanel" data-page="sounds" hidden><h2>Sounds</h2>
             <div class="set-row"><div class="set-l"><b id="sound-l">Soft sounds</b><span>On Allow, Send back and “That's everything”. Off unless you turn them on.</span></div><button type="button" class="switch" id="sound-tog" role="switch" aria-checked="false" aria-labelledby="sound-l"><span class="th-track" aria-hidden="true"><span class="th-knob"></span></span></button></div>

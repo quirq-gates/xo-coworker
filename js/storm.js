@@ -142,7 +142,7 @@ export function stormSource(state, emit, event) {
     state.projects = chats.filter((c) => !c.retired_at).map((c) => {
       const id = c.kind === "workspace" ? "workspace" : c.project;
       chatProject.set(c.id, id);
-      return { ...(prev.get(id) || {}), id, name: c.kind === "workspace" ? "Workspace" : c.project, kind: c.kind, chatId: c.id, routing: c.routing || null, pin: c.pin || null, hasChat: true };
+      return { ...(prev.get(id) || {}), id, name: c.kind === "workspace" ? "Workspace" : c.project, kind: c.kind, chatId: c.id, pid: c.project_pid || null, routing: c.routing || null, pin: c.pin || null, hasChat: true };
     });
     for (const c of chats) if (c.retired_at) chatProject.set(c.id, c.project || null);
   }

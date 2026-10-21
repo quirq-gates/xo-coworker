@@ -27,6 +27,7 @@ import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sen
 import { turnHtml } from "./turnview.js";
 import { itemParts } from "./review.js";
 import { runsStripHtml, runsListHtml, runViewHtml } from "./runsview.js";
+import { createSettings } from "./settings.js";
 
 const world = createWorld();
 // Demo-only features (seeded content, the night, rules, finds, Stop) never run against the real backend.
@@ -2056,9 +2057,11 @@ function closeKeys() { keys.hidden = true; keysReturn?.focus?.({ preventScroll: 
 // ── settings: a page over the main area; closing it returns exactly where you were ──
 const setEl = $("#settings");
 let setReturn = null;
+const SETS = createSettings({ world, announce, PROJ, onChange: () => schedule() });
 function setPage(id) {
   for (const b of $$("[data-set]")) b.setAttribute("aria-selected", String(b.dataset.set === id));
   for (const p of $$("[data-page]")) p.hidden = p.dataset.page !== id;
+  SETS.open(id);
 }
 function openSettings() {
   if (!setEl.hidden) return;
