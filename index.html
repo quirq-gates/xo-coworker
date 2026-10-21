@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <script>try{document.documentElement.dataset.theme=localStorage.getItem("cv-theme")==="light"?"light":"dark"}catch(e){document.documentElement.dataset.theme="dark"}</script>
-  <title>XO Space Cowork</title>
+  <title>XO Space</title>
   <link rel="stylesheet" href="./css/base.css">
   <link rel="stylesheet" href="./css/app.css">
   <link rel="stylesheet" href="./css/mode.css">
@@ -15,15 +15,17 @@
     <!-- Sidebar: Home, Workspace, then projects as button-like rows. Text only when a project needs you. -->
     <aside class="side" id="side" aria-label="Navigation">
       <div class="side-top">
-        <p class="brand"><span class="brand-mark" id="brand-mark"></span><b>Space</b><span>Cowork</span></p>
+        <p class="brand"><span class="brand-mark" id="brand-mark"></span><span class="sr-only">XO </span><b>Space</b></p>
         <button type="button" class="theme" id="theme" role="switch" aria-checked="false" aria-label="Light mode"></button>
         <button type="button" class="side-x" id="side-x" aria-label="Close menu"></button>
       </div>
+      <!-- Create XO Project: one easy, always-there entry under the brand -->
+      <button type="button" class="side-create" id="side-add"><span class="sc-ic" id="sc-ic"></span><span class="sc-t">Create XO Project</span></button>
       <nav class="nav" aria-label="Main">
         <button type="button" class="nrow" data-go="home" id="nv-home"><span class="nr-ic" id="ic-home"></span><span class="nr-name">Home</span><span class="nr-n" id="home-n"></span></button>
         <button type="button" class="nrow" data-go="ws" id="nv-ws"><span class="nr-ic nr-xo" id="ic-ws"></span><span class="nr-name">Workspace</span></button>
       </nav>
-      <div class="side-label"><span id="projects-label">Projects</span><button type="button" class="side-add" id="side-add" aria-label="Create XO Project" title="Create XO Project"></button></div>
+      <div class="side-label"><span id="projects-label">Projects</span></div>
       <nav class="projects" id="projects" aria-labelledby="projects-label"></nav>
       <div class="side-foot"><button type="button" class="help gear" id="set-side" aria-label="Settings" title="Settings" aria-haspopup="true" aria-expanded="false"></button></div>
     </aside>

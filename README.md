@@ -1,6 +1,6 @@
-# xo-swim
+# xo-coworker
 
-**Codename for XO Space Cowork: Smart Work & Ideas Management.**
+**XO Space's web UI.** Codename xo-swim: Smart Work & Ideas Management.
 
 A web UI for the XO Space **projects chat** backend (`/api/projects-chat/*`). It is built around one idea: protect the person's attention. The screen shows what is worth your time and the next action. Everything that only needs an agent stays quiet.
 

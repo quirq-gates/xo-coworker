@@ -52,7 +52,7 @@
 :root[data-theme="light"] .toast .t-m{color:#BDBDBD}
 :root[data-theme="light"] .t-undo{background:#3A3A3A;color:#fff}
 :root[data-theme="light"] .t-ring circle{stroke:#BDBDBD}
-:root[data-theme="light"] .create-ic,:root[data-theme="light"] .send:not(:disabled):not(.is-stop){color:#141414}
+:root[data-theme="light"] .create-ic,:root[data-theme="light"] .sc-ic,:root[data-theme="light"] .send:not(:disabled):not(.is-stop){color:#141414}
 :root[data-theme="light"] .next{--nx-arc:rgba(72,118,32,.75);background:linear-gradient(#fff,#fff) padding-box,conic-gradient(from var(--nx-a),transparent 0deg,var(--nx-arc) 50deg,transparent 110deg) border-box,linear-gradient(170deg,rgba(72,118,32,.55),#DCDCD8 34%,#E2E2DF) border-box;box-shadow:0 18px 40px -18px rgba(0,0,0,.18),0 1px 2px rgba(0,0,0,.05)}
 :root[data-theme="light"] .next.r-destructive{animation:none;background:linear-gradient(#fff,#fff) padding-box,linear-gradient(170deg,rgba(181,33,40,.6),rgba(181,33,40,.25) 40%,#E2E2DF) border-box}
 :root[data-theme="light"] .prow.needs .pr-name{color:#5E3507}
@@ -123,9 +123,16 @@ button:disabled{cursor:default}
 .brand{flex:1;display:flex;align-items:center;gap:9px;white-space:nowrap;min-width:0}
 .brand-mark .xo-mark{display:block;width:30px;height:13px}
 .brand b{font:650 16px/1 var(--sans);letter-spacing:-.015em}
-.brand span:last-child{font:500 16px/1 var(--sans);letter-spacing:-.015em;color:var(--ink-4)}
 .xo-mark .x{stroke:var(--mark-x)}.xo-mark .o{stroke:var(--mark-o)}
 .side-x{display:none}
+/* Create XO Project, under the brand: shaped like the rows below it, the plus in a green tile.
+   At rest it is an outline, not a filled tile, so it never reads as the selected row. */
+.side-create{display:flex;align-items:center;gap:11px;margin:0 10px 12px;min-height:42px;padding:6px 12px 6px 7px;border-radius:13px;background:transparent;border:1px solid var(--row-line-hover);color:var(--ink);font:550 var(--fs-md)/1.3 var(--sans);text-align:left;transition:background-color var(--dur-fast),border-color var(--dur-fast),transform 90ms var(--press)}
+.side-create:hover{background:var(--row-bg-hover);border-color:var(--line-hover)}
+.side-create:active{transform:scale(.985)}
+.sc-ic{flex:none;display:grid;place-items:center;width:28px;height:28px;border-radius:9px;background:var(--accent-fill);color:var(--accent-ink)}
+.sc-ic svg{width:15px;height:15px}
+.sc-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .help{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:var(--g18);color:var(--ink-3);font:600 12px/1 var(--sans);transition:color var(--dur-fast),border-color var(--dur-fast),transform 90ms var(--press)}
 .help:hover{color:var(--ink);border-color:var(--line-hover)}
 .help:active{transform:scale(.92)}
@@ -150,11 +157,8 @@ button:disabled{cursor:default}
 .nr-seal svg{width:14px;height:14px;color:var(--ink-4)}
 
 .side-label{display:flex;align-items:center;justify-content:space-between;margin:20px 12px 6px 16px;font:500 var(--fs-sm)/1 var(--sans);color:var(--ink-4)}
-.side-add{display:grid;place-items:center;width:24px;height:24px;border-radius:8px;color:var(--ink-4);transition:background var(--dur-fast),color var(--dur-fast)}
-.side-add:hover{background:var(--g1E);color:var(--ink)}
-.side-add svg{width:14px;height:14px}
 .projects{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:6px;padding:2px 12px 72px;scrollbar-width:thin;scrollbar-color:var(--g2A) transparent}
-.pr-ic{font:600 12.5px/1 var(--sans)}
+.pr-ic svg{width:15px;height:15px}
 .prow.is-on .pr-ic{color:var(--ink);background:var(--g26)}
 .pr-busy{position:absolute;right:-3px;bottom:-3px;width:9px;height:9px;border-radius:50%;background:var(--side)}
 .pr-busy::after{content:"";position:absolute;inset:2px;border-radius:50%;background:var(--info);opacity:.85}
@@ -334,7 +338,7 @@ body.panel-open .conv{--rp:calc(var(--pw) + 28px)}
 /* A project's header is one full-width row: the title on the left, the threads in progress
    as a thin strip in the middle, All threads on the right. */
 .top[data-kind="project"]{gap:20px;padding:14px calc(var(--hg) + var(--rp)) 14px var(--hg);border-bottom:1px solid var(--g1C)}
-.top[data-kind="project"] .top-who{flex:0 1 auto;min-width:120px;max-width:min(34%,380px)}
+.top[data-kind="project"] .top-who{flex:0 1 auto;min-width:120px;max-width:min(calc(34% + 46px),426px)}
 .top-end{flex:none;display:flex;align-items:center;margin-left:auto}
 .top-end:empty{display:none}
 .top[data-kind="thread"]{flex-direction:column;align-items:stretch;gap:3px;padding:12px calc(var(--hg) + var(--rp)) 8px var(--hg)}
@@ -345,6 +349,8 @@ body.panel-open .conv{--rp:calc(var(--pw) + 28px)}
 .top-back:active{transform:scale(.96)}
 .top-back svg{width:14px;height:14px}
 .top-who{flex:1;min-width:0;display:flex;align-items:center;gap:12px}
+.tw-ic{flex:none;display:grid;place-items:center;width:var(--h-ctl);height:var(--h-ctl);border-radius:var(--r);background:var(--g1C);border:1px solid var(--g26);color:var(--ink-3)}
+.tw-ic svg{width:18px;height:18px}
 .tw-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
 .tw-t h1{font:650 22px/1.2 var(--sans);letter-spacing:-.022em;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tw-t b{font:600 15px/1.25 var(--sans);letter-spacing:-.01em;color:var(--ink)}
@@ -624,8 +630,11 @@ button.hr:active{transform:scale(.97)}
 @keyframes fire{0%{transform:scale(.86)}60%{transform:scale(1.06) translateY(-1px)}100%{transform:none}}
 .at-list{position:absolute;left:-8px;bottom:100%;margin-bottom:12px;z-index:6;list-style:none;min-width:260px;padding:6px;border-radius:var(--r-lg);border:1px solid var(--line);background:var(--g1B);box-shadow:var(--shadow-lg);animation:msg-in .16s var(--glide)}
 .at-list li{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:9px;font:500 14px/1.2 var(--sans);color:var(--ink-2);cursor:pointer}
+.at-ic{flex:none;display:grid;place-items:center;color:var(--ink-4)}
+.at-ic svg{width:15px;height:15px}
 .at-s{margin-left:auto;font:400 12px var(--sans);color:var(--ink-4)}
 .at-list li[aria-selected="true"],.at-list li:hover{background:var(--bg-3);color:var(--ink)}
+.at-list li[aria-selected="true"] .at-ic,.at-list li:hover .at-ic{color:var(--ink-3)}
 
 /* the thread's own decision, docked above the composer */
 .tdock{max-width:720px;margin:0 auto}
@@ -1355,6 +1364,8 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
   .top[data-kind="project"] .top-who{flex:1;max-width:none}
   .top[data-kind="project"] .now-wrap{order:3;flex-basis:100%}
   .top[data-kind="project"] .tw-t h1{font-size:19px}
+  .top[data-kind="project"] .tw-ic{align-self:flex-start;width:30px;height:30px;border-radius:9px}
+  .top[data-kind="project"] .tw-ic svg{width:16px;height:16px}
   .top[data-kind="ws"]{top:0}
   .all-btn{align-self:flex-start;margin-top:2px;padding:0 4px 0 10px}
   .pj-s{white-space:normal}

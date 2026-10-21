@@ -259,7 +259,7 @@ function sideRender(needs) {
     const washing = w && w.until > now;
     return { key: p.id, html:
       `<button type="button" class="prow${needsMe ? ` needs k-${kind}` : ""}${on ? " is-on" : ""}${washing ? " wash" : ""}" data-go="p:${esc(p.id)}" data-w="${washing ? w.n : 0}"${on ? ' aria-current="page"' : ""} aria-label="${esc(p.name)}${needsMe ? `. ${asks.length} need${asks.length === 1 ? "s" : ""} you: ${esc(label)}` : busy ? ". Working" : ""}">` +
-      `<span class="pr-ic" aria-hidden="true">${esc(p.name.charAt(0).toUpperCase())}${busy ? `<i class="pr-busy"></i>` : ""}</span>` +
+      `<span class="pr-ic" aria-hidden="true">${ICON.project}${busy ? `<i class="pr-busy"></i>` : ""}</span>` +
       `<span class="pr-main"><span class="pr-l1"><span class="pr-name">${esc(p.name)}</span>${needsMe ? `<span class="pr-w" aria-hidden="true"><i class="pr-d"></i>${asks.length}</span>` : ""}</span>` +
       (label ? `<span class="pr-t">${esc(label)}</span>` : "") + `</span></button>` };
   });
@@ -809,7 +809,7 @@ function topRender(needs) {
     const w = ts.filter(isBusy).length;
     const dn = ts.filter((x) => x.state === "done").length;
     const parts = [nd && `<b class="is-amber">${nd} need${nd === 1 ? "s" : ""} you</b>`, w && `${w} working`, dn && `${dn} done this week`].filter(Boolean);
-    who = `<span class="tw-t"><h1 id="conv-title">${esc(PROJ(pid))}</h1><span class="pj-s">${parts.join(" · ") || (ts.length ? "All quiet" : "No threads yet")}${S.desc[pid] ? ` · ${esc(S.desc[pid])}` : ""}</span></span>`;
+    who = `<span class="tw-ic" aria-hidden="true">${ICON.project}</span><span class="tw-t"><h1 id="conv-title">${esc(PROJ(pid))}</h1><span class="pj-s">${parts.join(" · ") || (ts.length ? "All quiet" : "No threads yet")}${S.desc[pid] ? ` · ${esc(S.desc[pid])}` : ""}</span></span>`;
     end = ts.length ? `<button type="button" class="all-btn" data-all-threads aria-haspopup="dialog" title="All threads">All threads<span>${ts.length}</span></button>` : "";
   } else if (t) {
     who = `<h1 class="tw-h" id="conv-title">${esc(t.title)}</h1><span class="badge st-${t.state}"><i class="g g-${glyphOf(t)}" aria-hidden="true"></i>${wordOf(t)}</span>`;
@@ -1140,7 +1140,7 @@ function updateComposer() {
   atList._sel = Math.min(atList._sel || 0, opts.length - 1);
   atList.innerHTML = opts.map((p, i) => {
     const w = world.state.threads.filter((x) => x.project === p.id && isBusy(x)).length;
-    return `<li role="option" id="at-${i}" data-pid="${esc(p.id)}" aria-selected="${i === atList._sel}">@${esc(p.id)}<span class="at-s">${w ? `${w} working` : "quiet"}</span></li>`;
+    return `<li role="option" id="at-${i}" data-pid="${esc(p.id)}" aria-selected="${i === atList._sel}"><span class="at-ic" aria-hidden="true">${ICON.project}</span>@${esc(p.id)}<span class="at-s">${w ? `${w} working` : "quiet"}</span></li>`;
   }).join("");
   atList.hidden = false;
   say.setAttribute("aria-expanded", "true");
@@ -1405,7 +1405,7 @@ function render() {
   chipRender();
   D.sync();
   const nd = sealed() ? 0 : needs.filter((n) => n.admitted && !n.later).length;
-  document.title = sealed() ? "Sealed · Converged" : Kit.titleFor(nd, "Converged");
+  document.title = sealed() ? "Sealed · XO Space" : Kit.titleFor(nd, "XO Space");
 }
 scroller.addEventListener("scroll", () => {
   // live: reaching the top loads earlier messages (the API's newest-N window grows: 40, 80, 160…)
@@ -1675,6 +1675,8 @@ async function openCreate() {
 }
 function closeCreate() {
   if (!dlg.open) return;
+  // On a phone the sidebar button that opened it is inside the closed drawer: return to the menu.
+  if (PHONE.matches) setTimeout(() => $("#pb-menu").focus({ preventScroll: true }), RM.matches ? 0 : 170);
   if (RM.matches) { dlg.close(); return; }
   dlg.classList.add("is-closing");
   setTimeout(() => { dlg.classList.remove("is-closing"); dlg.close(); }, 160);
@@ -1896,7 +1898,7 @@ addEventListener("keydown", (e) => {
 
 // ── boot ────────────────────────────────────────────────────────────────────
 $("#brand-mark").innerHTML = XO;
-$("#side-add").innerHTML = ICON.plus;
+$("#sc-ic").innerHTML = ICON.plus;
 $("#dlg-ic").innerHTML = ICON.project;
 $("#ic-home").innerHTML = ICON.home;
 $("#ic-ws").innerHTML = XO;

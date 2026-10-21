@@ -16,9 +16,9 @@ For each component: **what it is**, **why it is this way** (the evidence and the
 
 ### 1.2 Sidebar
 
-**What.** Top: the brand "**Space** Cowork" with the XO mark, and a light-mode slide switch. Then **Home** and **Workspace**. Then "Projects" with a quiet "+" (Create XO Project). Then the project rows. At the bottom, a "?" for keyboard shortcuts.
+**What.** Top: the brand **XO Space** (the XO mark, then "Space"), and a light-mode slide switch. Under it, **Create XO Project**: a full-width button shaped like the rows, with the plus in a small green tile. Then **Home** and **Workspace**. Then "Projects" and the project rows. At the bottom, the Settings cog.
 
-**Project rows** are button-like tiles with a subtle glass surface: a letter tile and the name.
+**Project rows** are button-like tiles with a subtle glass surface: the cube tile and the name.
 - **Quiet project**: the name only, plus a small blue dot while something is working.
 - **Needs you**: the tile, name and a short label tint amber, with a ◆ count. The label is the lead ask in a few words ("Run `npm test`"). It turns red when the lead ask is destructive or stopped.
 - When the count rises, the row gets one 2.6 s amber wash, then goes still.
@@ -30,12 +30,14 @@ For each component: **what it is**, **why it is this way** (the evidence and the
 - **Accent plus ◆.** An accent colour is used and the diamond is kept. Shape plus colour, so state never depends on hue alone.
 - **A calm amber count, never a red badge.** Red counts are something to chase; amber says "your turn".
 - **Names in sans**, not mono.
-- **The "?" at the bottom** was confirmed in review and is held there.
+- **The button at the bottom** ("?" in review, confirmed there) became the Settings cog on 2026-10-14 (hub #7); the shortcuts moved into Settings › Keyboard.
 - **A slide switch for light mode**: a toggle that slides in, rather than a button.
+- **Create XO Project is a real button under the brand** (owner, 2026-10-21: "an easy-looking way to create a new project, like it was before"). The classic UI had exactly this; 17 · Converged had reduced it to a bare 24 px "+" beside "Projects", which was too easy to miss. It is shaped like the rows (13 px radius, row surface, 42 px high) so it belongs to the sidebar, and the plus sits in a green tile, the same as Home's button, because creating a project is the primary action there. At rest it is an outline (no fill), so it never looks like the selected row below it; it fills on hover. Home keeps its own button.
+- **The cube on every project** (owner, 2026-10-21): the classic UI's project icon, restored in place of the letter tile; see [05 §2.5](05-visual-system.md).
 
 ### 1.3 The phone
 
-**What.** At ≤760 px the sidebar becomes a drawer with a scrim; a 52 px top bar holds menu, title and "?". The decision panel and the intelligence popover become bottom sheets. The Now shelf becomes a horizontal snap strip. Every target is at least 36 px.
+**What.** At ≤760 px the sidebar becomes a drawer with a scrim; a 52 px top bar holds menu, title and the Settings cog. The decision panel and the intelligence popover become bottom sheets. The Now shelf becomes a horizontal snap strip. Every target is at least 36 px.
 
 **Why.** The round-2 brief established that this is a texting app, so mobile matters. Sheets own the bottom edge because that is where the thumb is. The drawer casts its shadow only while open; a stray shadow on the left edge in mobile mode was found and removed.
 
@@ -297,7 +299,7 @@ In Live, the backend has no approve/deny route yet (R2). A thread waiting on you
 
 **What.** A dialog: "**Create XO Project** · Its own coordinator, plan and memory." A name field ("e.g. Billing API") with a live "Saved as `~/xo-projects/{slug}`"; "What is it for? *optional*"; "Create project". It uses the XO Space API (`GET /api/config/workspace`, then `POST /api/files/mkdir` with scaffolding). Errors in plain words: "There's already a project called 'billing-api'. Pick another name."
 
-**Why.** A "Create XO Project" button was specified for the sidebar; 13's style was adopted, and it was also placed on Home. No separate folder field, because the folder is the same as the name. "A new project", not "a new folder".
+**Why.** A "Create XO Project" button was specified for the sidebar; 13's style was adopted, and it was also placed on Home. Since 2026-10-21 the sidebar's entry is a full-width button under the brand again (§1.2). No separate folder field, because the folder is the same as the name. "A new project", not "a new folder".
 
 ### 6.2 Jump (⌘K) and Keys (?)
 
