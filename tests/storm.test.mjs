@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createParser, SSEStream } from "../js/sse.js";
 import { createTurns } from "../js/blocks.js";
+import { itemParts, itemBody, questionsOf, itemEffort, evidenceOf, hostOf, isNo } from "../js/review.js";
 
 let passed = 0;
 const pending = [];
@@ -280,6 +281,62 @@ t("stream: nudge never opens a second connection; close stops delivery", async (
   const n = got.length;
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(got.length, n);
+});
+
+// ── review items (js/review.js): every kind's answers come from its own options ──
+const OPT = {
+  once: { id: "once", decision: "allow", label: "Allow once", scope: "once" },
+  thread: { id: "thread", decision: "allow", label: "Allow for this thread", scope: "thread", sentence: "In this thread, run exactly `npm test`" },
+  ruleP: { id: "rule:project", decision: "allow", label: "In billing-api, run exactly `npm test`", scope: "rule", sentence: "In billing-api, run exactly `npm test`" },
+  deny: { id: "deny", decision: "deny", label: "Deny", note: true },
+};
+const item = (kind, extra = {}) => ({ id: "rv_1", kind, state: "open", risk: "notable", title: "T", why: "W", detail: {}, options: [], ...extra });
+t("permission: Allow once, Deny with a note, this thread, a rule with the server's sentence", () => {
+  const it = item("permission", { options: [OPT.once, OPT.thread, OPT.ruleP, OPT.deny], detail: { command: "npm test" } });
+  const P = itemParts(it);
+  assert.deepEqual([P.primary.id, P.back.id, P.scopes.map((o) => o.id), P.hold], ["once", "deny", ["thread", "rule:project"], false]);
+  assert.deepEqual(itemBody(it, "allow"), { decision: "allow" });
+  assert.deepEqual(itemBody(it, "deny", "  use the cache  "), { decision: "deny", note: "use the cache" });
+  assert.deepEqual(itemBody(it, { scope: OPT.thread }), { decision: "allow", scope: "thread" });
+  assert.deepEqual(itemBody(it, { scope: OPT.ruleP }), { decision: "allow", option: "rule:project", rule_sentence: "In billing-api, run exactly `npm test`" });
+  assert.equal(isNo(itemBody(it, "deny")), true);
+  assert.equal(evidenceOf(it).blocks[0].text, "npm test");
+});
+t("destructive permission needs the hold; a secret's once carries its why", () => {
+  const it = item("permission", { risk: "destructive", options: [{ ...OPT.once, why: "It carries a secret, so no rule that would keep the secret is offered." }, OPT.deny] });
+  const P = itemParts(it);
+  assert.equal(P.hold, true);
+  assert.match(P.why, /carries a secret/);
+  assert.equal(itemEffort(it), "think");
+});
+t("question: one option, words, several questions; never a non-answer", () => {
+  const it = item("question", { options: [{ id: "answer", decision: "answer", label: "Answer" }], detail: { questions: [{ id: "answer", question: "Which provider?", options: [{ label: "SES", description: "AWS" }, { label: "Postmark" }] }] } });
+  assert.deepEqual(itemBody(it, { option: "Postmark" }), { decision: "answer", option: "Postmark" });
+  assert.deepEqual(itemBody(it, { text: "SES for now" }), { decision: "answer", answer: "SES for now" });
+  assert.deepEqual(itemBody(it, { answers: { a: "x", b: ["y", "z"] } }), { decision: "answer", answer: { a: "x", b: ["y", "z"] } });
+  assert.throws(() => itemBody(it, "allow"));
+  assert.throws(() => itemBody(it, "deny"), /no way to say no/);
+  assert.equal(questionsOf(it)[0].options[0].description, "AWS");
+});
+t("approval, action, create_project, create_job, usage, integrity, suggestion", () => {
+  const ap = item("approval", { options: [{ id: "approve", decision: "approve", label: "Approve" }, { id: "send_back", decision: "send_back", label: "Send back", note: true }], detail: { plan: "1. a\n2. b" } });
+  assert.deepEqual([itemBody(ap, "allow"), itemBody(ap, "deny", "no")], [{ decision: "approve" }, { decision: "send_back", note: "no" }]);
+  assert.equal(itemEffort(ap), "think", "a plan to approve needs focus");
+  const ac = item("action", { options: [{ id: "done", decision: "done", label: "Done" }, { id: "cant", decision: "cant", label: "Can't", note: true }] });
+  assert.deepEqual([itemBody(ac, "allow"), itemBody(ac, "deny", "no login")], [{ decision: "done" }, { decision: "cant", note: "no login" }]);
+  const cp = item("create_project", { chat_id: "chat_ws", thread_ts: null, options: [{ id: "allow", decision: "allow", label: "Allow", answer: "name" }, { id: "send_back", decision: "send_back", label: "Send back", note: true }], detail: { name: "status-page", purpose: "A status page" } });
+  assert.deepEqual(itemBody(cp, { name: " status-v2 " }), { decision: "allow", answer: "status-v2" });
+  assert.deepEqual(hostOf(cp), { id: "chat:chat_ws", chat: "chat_ws", title: null });
+  const cj = item("create_job", { thread_ts: "cmsg_x", options: [{ id: "allow", decision: "allow", label: "Allow" }, { id: "send_back", decision: "send_back", label: "Send back", note: true }], detail: { schedule: "every day at 09:00", project: "billing-api", job: { prompt: "Triage", model: "haiku" } } });
+  assert.match(evidenceOf(cj).facts.join(" | "), /every day at 09:00/);
+  assert.equal(hostOf(cj), null, "a job asked from a thread stays on its thread");
+  const us = item("usage", { risk: null, chat_id: null, session_id: null, thread_ts: null, options: [{ id: "continue", decision: "continue", label: "Continue until the next reset" }, { id: "wait", decision: "wait", label: "Wait" }], detail: { pool: "claude_code:a", resets_at: "x" } });
+  assert.deepEqual([itemBody(us, "allow"), itemBody(us, "deny")], [{ decision: "continue" }, { decision: "wait" }]);
+  assert.equal(hostOf(us).id, "pool:claude_code:a");
+  const ig = item("integrity", { risk: null, options: [{ id: "done", decision: "done", label: "Seen" }] });
+  assert.deepEqual([itemParts(ig).primary.label, itemParts(ig).back, itemBody(ig, "allow")], ["Seen", null, { decision: "done" }]);
+  const sg = item("suggestion", { risk: null, options: [{ id: "approve", decision: "approve", label: "Pause it", hold_to_confirm: true }, { id: "deny", decision: "deny", label: "Dismiss" }] });
+  assert.deepEqual([itemParts(sg).hold, itemBody(sg, "allow"), itemBody(sg, "deny", "ignored")], [true, { decision: "approve" }, { decision: "deny" }], "a deny without note:true carries no note");
 });
 
 for (const run of pending) await run();

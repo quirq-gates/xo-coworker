@@ -14,6 +14,7 @@ import { SSEStream } from "./sse.js";
 import { createTurns } from "./blocks.js";
 import { tasksOf } from "./model.js";
 import { uiMsg, mergeRows, stormAsks, mapLimit } from "./timeline.js";
+import { hostOf } from "./review.js";
 
 const STATUS_MS = 30000;          // the engine's status (pools, review counts); frames carry the rest
 const STATUS_RETRY_MS = 8000;
@@ -111,6 +112,21 @@ export function stormSource(state, emit, event) {
       next.push(t);
     }
     state.threads = next.sort((a, b) => b.lastAt - a.lastAt);
+    // items with no thread (paid usage, a project the workspace proposes, a plain chat's report)
+    // still reach Needs you: each is hosted by its chat or by the person's account
+    const hosts = new Map();
+    for (const it of state.review.values()) {
+      if (it.state !== "open") continue;
+      const h = hostOf(it);
+      if (!h) continue;
+      const project = h.chat ? projectOf(h.chat) : "workspace";
+      const host = hosts.get(h.id) || { id: h.id, host: true, project: project || "workspace", chatId: h.chat, title: h.title || (project === "workspace" || !project ? "Workspace" : project),
+        state: "needs_approval", checklist: { items: [], total: 0, done: 0, doing: 0 }, messages: [], asks: [], live: true, loaded: true, busy: false,
+        createdAt: Date.parse(it.created_at) || Date.now(), lastAt: Date.parse(it.created_at) || Date.now(), card: {} };
+      host.asks.push(...stormAsks(host, [it]));
+      hosts.set(h.id, host);
+    }
+    state.hosts = [...hosts.values()];
   }
   let soonT = null, emitT = null;
   const soon = () => { clearTimeout(soonT); soonT = setTimeout(() => { commit(); emit(); }, 30); };
@@ -119,6 +135,7 @@ export function stormSource(state, emit, event) {
   // ── loading ───────────────────────────────────────────────────────────────
   function setProjects(chats) {
     const prev = new Map(state.projects.map((p) => [p.id, p]));
+    chatProject.clear();
     state.projects = chats.filter((c) => !c.retired_at).map((c) => {
       const id = c.kind === "workspace" ? "workspace" : c.project;
       chatProject.set(c.id, id);
@@ -134,7 +151,7 @@ export function stormSource(state, emit, event) {
         const before = new Set(state.projects.map((p) => p.chatId));
         setProjects(chats || []);
         chatsAt = Date.now();
-        state.error = null;
+        state.error = null; state.errorCode = null;
         // a project chat we haven't seen: its threads (there may be none yet)
         const fresh = state.projects.filter((p) => p.kind === "project" && !before.has(p.chatId));
         if (state.loaded) await mapLimit(fresh, LOAD_CAP, loadThreads);
@@ -152,10 +169,20 @@ export function stormSource(state, emit, event) {
     if (recoverT) return;
     recoverT = setTimeout(async () => { recoverT = null; await recover(); }, ms);
   }
+  let recovering = null;
   async function recover() {
+    if (recovering) return recovering;
     if (!state.error && state.projects.length) return;
-    await loadAll();
-    commit(); emit();
+    recovering = (async () => {
+      holding = true;
+      try { await loadAll(); } finally {
+        commit();
+        holding = false;
+        for (const f of held.splice(0)) apply(f);
+        commit(); emit();
+      }
+    })();
+    try { await recovering; } finally { recovering = null; }
   }
   const maybeChats = () => { if (Date.now() - chatsAt > CHATS_MIN_MS) loadChats(); };
   async function loadThreads(p) {
@@ -299,8 +326,8 @@ export function stormSource(state, emit, event) {
     const r = rawThreads.get(ts);
     if (!r) return;
     const th = state.threadHist[ts] || (state.threadHist[ts] = { loading: false, loaded: false, error: null });
-    // its turns may have been pruned while it was off screen: read them again
-    if (th.loaded && r.session_id && !state.turns.hasSession(r.session_id)) { loadTurns(r.session_id).then(soon); return; }
+    // its turns were pruned while it was off screen: read them again
+    if (th.loaded && r.session_id && trimmed.has(r.session_id)) { trimmed.delete(r.session_id); loadTurns(r.session_id).then(soon); return; }
     if (th.loading || th.loaded) return;
     th.loading = true;
     soon();
@@ -475,6 +502,7 @@ export function stormSource(state, emit, event) {
     state.timeline = {}; state.hist = {}; state.threadMsgs = {}; state.threadHist = {};
     state.review.clear(); state.routed = {}; state.turns = createTurns();
     await loadAll();
+    for (const [ts, r] of rawThreads) if (!chatProject.has(r.chat_id)) rawThreads.delete(ts);
     await Promise.all([...watched.projects].map((p) => loadTimeline(p)));
     if (watched.thread) await loadThread(watched.thread);
     commit(); emit();
@@ -507,11 +535,12 @@ export function stormSource(state, emit, event) {
     emit();
   }
   boot();
+  const trimmed = new Set(); // sessions whose older turns were pruned
   setInterval(() => {
     const keep = new Set();
     const t = watched.thread && rawThreads.get(watched.thread);
     if (t && t.session_id) keep.add(t.session_id);
-    state.turns.prune(keep);
+    for (const sid of state.turns.prune(keep)) trimmed.add(sid);
   }, 60000);
   addEventListener("visibilitychange", () => {
     if (document.hidden) return;
@@ -587,7 +616,27 @@ export function stormSource(state, emit, event) {
         soon();
         return t;
       },
-      decide: () => Promise.reject(new Error("Deciding is wired in the review queue.")),
+      decide: () => Promise.reject(new Error("Decide a storm item with decideItem.")),
+      /**
+       * The person's decision on a review item (UI-reference §2.4): the only writer of an owner
+       * decision. The idempotency key makes a retry harmless. An item decided elsewhere, withdrawn or
+       * expired meanwhile is not an error for the person: it leaves the list, and we say why.
+       */
+      decideItem: async (id, body) => {
+        try {
+          const it = await api.decide(id, { ...body, idempotency_key: body.idempotency_key || newClientId() });
+          if (it && it.state && it.state !== "open") { state.review.delete(id); soon(); }
+          return it;
+        } catch (err) {
+          if (err.code === "already_decided" || err.code === "withdrawn" || err.code === "expired") {
+            state.review.delete(id);
+            soon();
+            event({ kind: "item_gone", code: err.code, id });
+            return null;
+          }
+          throw err;
+        }
+      },
       refresh: async () => { await loadChats(); await mapLimit(state.projects.filter((p) => p.kind === "project"), LOAD_CAP, loadThreads); commit(); emit(); },
       /** The open conversations: load their timelines once; the stream keeps them current. */
       watch: (projects) => { watched.projects = new Set((projects || []).filter(Boolean)); for (const p of watched.projects) loadTimeline(p); },

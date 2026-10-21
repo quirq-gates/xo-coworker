@@ -12,7 +12,7 @@
 // runs. Intelligence per session in the composer. Light and dark.
 import { createWorld, esc, WAITING } from "./world.js";
 import { mountMode } from "./mode.js";
-import { renderMarkdown } from "./markdown.js";
+import { renderMarkdown, renderInline } from "./markdown.js";
 import * as Kit from "./kit.js";
 import * as K from "./keys.js";
 import { createDecisions } from "./decide.js";
@@ -23,8 +23,9 @@ import { createNight } from "./night.js";
 import { createIntel } from "./intel.js";
 import { EFFORT, HELD_SEED, estLine, evidenceFor } from "./content.js";
 import { ICON, XO, NEXT_GLYPH, $, $$, RM, clock, dayOf, short, elapsed, reconcile, sound, wait, dial, morph, expand, shifted } from "./ui.js";
-import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock } from "./timeline.js";
+import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText } from "./timeline.js";
 import { turnHtml } from "./turnview.js";
+import { itemParts } from "./review.js";
 
 const world = createWorld();
 // Demo-only features (seeded content, the night, rules, finds, Stop) never run against the real backend.
@@ -131,7 +132,12 @@ const D = createDecisions({
   world, P, rules: R, PROJ, announce, waitSince, absorbing,
   render: () => schedule(),
   later: S.later,
-  onOpenThread: (tid) => go("t:" + tid, { keepPanel: true }),
+  onOpenThread: (tid) => {
+    // an item hosted by a chat (no thread) opens that conversation; one hosted by the account has no page yet
+    const h = (world.state.hosts || []).find((x) => x.id === tid);
+    if (h) { if (h.chatId) go(convOfChat(h.project), { keepPanel: true }); else heraldShow({ kind: "calm", text: "It isn't tied to a conversation", sub: h.title }, 3600); return; }
+    go("t:" + tid, { keepPanel: true });
+  },
   onAllClear: (summary) => { setTimeout(() => heraldShow({ kind: "clear", text: "All clear", sub: summary }, 4600), RM.matches ? 0 : 900); },
   onUndone: (key) => { if (S.view === "home") { S.pin = key; S.pinAnim = "undo"; } },
   onBreak: (left) => heraldShow({ kind: "calm", text: "Taking a break", sub: `${left} wait safely` }, 5200),
@@ -154,12 +160,14 @@ const convThread = (v) => (v && v.startsWith("t:") ? world.thread(v.slice(2)) : 
 const convProject = (v) => (v === "ws" || v === "home" ? "workspace" : v.startsWith("p:") ? v.slice(2) : convThread(v)?.project);
 const sessionOf = (v) => (v === "home" ? "ws" : v);
 const askTitle = (n) => {
+  if (n.ask.live) return renderInline(n.ask.title || "", true); // the server's words; `code` stays code
   const cmd = Kit.commandOf(n.ask);
   if (cmd) return `Run <code>${esc(cmd)}</code>`;
   if (n.group === "stopped") return esc(n.t.title);
   return esc(n.risk === "destructive" ? n.ask.title.replace(/:\s.*$/, "") : n.ask.title);
 };
 const askShort = (n) => {
+  if (n.ask.live) return plainText(n.ask.title || "");
   const cmd = Kit.commandOf(n.ask);
   if (cmd) return `Run ${cmd}`;
   if (n.group === "stopped") return "Stopped";
@@ -309,7 +317,10 @@ function nextActHtml(n) {
     html += `<div class="nx-opts" role="group" aria-label="Answers">${a.options.map((o, i) => optHtml(o, i, ev)).join("")}</div>` +
       `<div class="nx-foot"><button type="button" class="nx-link" data-fid="ev" data-decide="${esc(n.key)}">${ICON.eye}Details</button><button type="button" class="nx-link" data-fid="back" data-nx-back>${ICON.rewind}Send back</button></div>`;
   } else if (n.effort === "glance" && binary) {
-    html += `<div class="nx-btns"><button type="button" class="b b-allow" data-fid="allow" data-nx-allow><span class="b-l">${ICON.check}Allow</span></button><button type="button" class="b b-back" data-fid="back" data-nx-back><span class="b-l">${ICON.rewind}Send back</span></button></div>` +
+    // a storm item's answers keep the server's own words (Allow once, Deny, Approve…)
+    const IP = a.item ? itemParts(a.item) : null;
+    const yes = IP && IP.primary ? IP.primary.label : "Allow", no = IP && IP.back ? IP.back.label : "Send back";
+    html += `<div class="nx-btns"><button type="button" class="b b-allow" data-fid="allow" data-nx-allow><span class="b-l">${ICON.check}${esc(yes)}</span></button><button type="button" class="b b-back" data-fid="back" data-nx-back><span class="b-l">${ICON.rewind}${esc(no)}</span></button></div>` +
       `<div class="nx-foot"><button type="button" class="nx-link" data-fid="ev" data-decide="${esc(n.key)}">${ICON.eye}Details</button>${rule}</div>`;
   } else {
     const verb = n.group === "stopped" ? "Look and choose" : n.risk === "destructive" ? "Read it closely" : n.ask.kind === "action" ? "See what it needs" : n.ask.replyOnly ? "Read and reply" : "Decide";
@@ -322,13 +333,13 @@ function nextActHtml(n) {
 }
 function nextCardHtml(n) {
   const t = n.t, E = EFFORT[n.effort];
-  const head = Kit.commandOf(n.ask) ? `<span class="h-verb">Run</span> <code class="h-cmd">${esc(Kit.commandOf(n.ask))}</code>` : n.group === "stopped" ? `<span class="h-verb">Stopped at</span> ${esc((t.checklist.items.find((i) => i.state !== "done") || t).text || t.title)}` : esc(n.risk === "destructive" ? n.ask.title.replace(/:\s.*$/, "") : n.ask.title);
+  const head = n.ask.live ? renderInline(n.ask.title || "", true) : Kit.commandOf(n.ask) ? `<span class="h-verb">Run</span> <code class="h-cmd">${esc(Kit.commandOf(n.ask))}</code>` : n.group === "stopped" ? `<span class="h-verb">Stopped at</span> ${esc((t.checklist.items.find((i) => i.state !== "done") || t).text || t.title)}` : esc(n.risk === "destructive" ? n.ask.title.replace(/:\s.*$/, "") : n.ask.title);
   return `<article class="next r-${n.risk} e-${n.effort}" data-key="${esc(n.key)}" data-fid="nextcard" tabindex="-1" aria-label="Your next move: ${esc(n.ask.title)}">` +
     `<div class="stamp stamp-allow" aria-hidden="true"><svg viewBox="0 0 52 52"><circle class="sc" cx="26" cy="26" r="23"/><path class="sk" d="M15 27l7.5 7.5L38 19"/></svg></div>` +
     `<div class="nx-in">` +
     `<div class="nx-meta"><span class="eff e-${n.effort}">${dial(n.effort)}<b>${E.label}</b><span>${E.time}</span></span>` +
     (n.risk === "destructive" ? `<span class="risk r-destructive">${ICON.lock}Destructive</span>` : n.group === "stopped" ? `<span class="risk r-stopped">Stopped</span>` : "") +
-    `<button type="button" class="nx-where" data-fid="where" data-go="t:${esc(t.id)}" title="Open the thread">${esc(PROJ(t.project))}<span aria-hidden="true">›</span>${esc(t.title)}</button></div>` +
+    (t.host ? `<button type="button" class="nx-where" data-fid="where"${t.chatId ? ` data-go="${esc(convOfChat(t.project))}"` : ""} title="Where it was asked">${esc(t.title)}</button></div>` : `<button type="button" class="nx-where" data-fid="where" data-go="t:${esc(t.id)}" title="Open the thread">${esc(PROJ(t.project))}<span aria-hidden="true">›</span>${esc(t.title)}</button></div>`) +
     `<h2 class="nx-h" id="nx-h">${head}</h2>` +
     (estLine(n) ? `<p class="nx-est" title="${n.t.live ? "From its checklist: the steps not done yet." : "An estimate: the steps left that wait on this answer × a typical step time."}">${ICON.hourglass}${esc(estLine(n))}</p>` : "") +
     (n.sug ? `<p class="c-sug" title="${esc(n.sug.why)}">${ICON.spark}<span>Suggests <b>${esc(n.sug.label)}</b></span><em>${esc(n.sug.sure)}</em></p>` : "") +
@@ -1482,6 +1493,8 @@ function saveScroll() {
 }
 function go(v, { from, focus = false } = {}) {
   if (!v) return;
+  // an edit or menu in a thread's header belongs to that visit
+  S.tEdit = null; S.tMenu = null;
   closeSettings({ restore: false });
   setDrawer(false);
   IQ.close({ restore: false });

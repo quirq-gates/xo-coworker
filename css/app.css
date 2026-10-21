@@ -1550,3 +1550,32 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
   .tb-rows,.tb-steps,.tb-plan-l{margin-left:14px}
   .tw-label{max-width:110px}
 }
+
+/* ── storm review items in the Decision Kit (U2): the server's own answers ──── */
+.o-d{display:block;margin-top:3px;font:400 var(--fs-sm)/1.4 var(--sans);color:var(--ink-3);text-align:left}
+.b-opt:not(.has-pv):has(.o-d){align-items:flex-start;text-align:left}
+.c-qs{display:flex;flex-direction:column;gap:14px;margin-bottom:4px}
+.c-q{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:8px;min-width:0}
+.c-q legend{padding:0;font:600 var(--fs-md)/1.35 var(--sans);color:var(--ink)}
+.c-q-q{font-size:var(--fs-base);line-height:1.5;color:var(--ink-2)}
+.c-q-opts{display:flex;flex-direction:column;gap:6px}
+.c-q-o{display:flex;align-items:flex-start;gap:10px;min-height:40px;padding:9px 12px;border-radius:11px;border:1px solid var(--g2E);cursor:pointer;transition:border-color var(--dur-fast),background var(--dur-fast)}
+.c-q-o:hover{background:var(--g1E)}
+.c-q-o:has(input:checked){border-color:color-mix(in srgb,var(--accent-fill) 55%,var(--g2E));background:color-mix(in srgb,var(--accent-fill) 6%,transparent)}
+.c-q-o input{margin-top:3px;accent-color:var(--accent-fill)}
+.c-q-o span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.c-q-o b{font:550 var(--fs-md)/1.3 var(--sans);color:var(--ink)}
+.c-q-o em{font-style:normal;font-size:var(--fs-sm);line-height:1.4;color:var(--ink-3)}
+.c-q-in,.c-name-in{height:40px;padding:0 12px;border-radius:11px;border:1px solid var(--comp-line-hi);background:var(--surface);font:400 var(--fs-md)/1 var(--sans);color:var(--ink)}
+.c-q-in:focus,.c-name-in:focus{outline:2px solid rgba(var(--accent-rgb),.75);outline-offset:1px}
+.c-q-s{font-size:var(--fs-sm);color:var(--ink-4)}
+.c-name{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;font-size:var(--fs-sm);color:var(--ink-3)}
+.c-iwhy{display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:var(--fs-sm);line-height:1.5;color:var(--ink-3)}
+.c-iwhy svg{flex:none;width:13px;height:13px;margin-top:2px;color:var(--ink-4)}
+.teach-scope.is-list{display:flex;flex-direction:column;align-items:stretch;gap:6px}
+.teach-scope.is-list button{justify-content:flex-start;text-align:left;height:auto;min-height:36px;padding:8px 12px;line-height:1.4;white-space:normal}
+.dt-facts{list-style:none;display:flex;flex-direction:column;gap:5px;margin-top:12px;font-size:var(--fs-base);line-height:1.5;color:var(--ink-2)}
+.dt-facts li::before{content:"· ";color:var(--ink-4)}
+.chg.is-md .chg-md{padding:10px 14px;font-size:var(--fs-md)}
+.chg+.chg{margin-top:10px}
+.teach-scope.is-list button{border-radius:10px}

@@ -193,18 +193,22 @@ export function createTurns() {
     },
     /**
      * Keep memory bounded: drop finished turns of sessions not in `keep`, beyond the newest `perSession`
-     * of each, and never more than `max` finished turns in all. Running turns always stay.
+     * of each, and never more than `max` finished turns in all. Running turns always stay. Returns
+     * the sessions that lost turns.
      */
     prune(keep = new Set(), { perSession = 2, max = 300 } = {}) {
       const done = [...turns.values()].filter((t) => t.status !== "running").sort((a, b) => (b.lastSeq || 0) - (a.lastSeq || 0));
       const seen = new Map();
+      const trimmed = new Set();
       let kept = 0;
       for (const t of done) {
         const n = (seen.get(t.session) || 0) + 1;
         seen.set(t.session, n);
         if ((keep.has(t.session) || n <= perSession) && kept < max) { kept++; continue; }
         turns.delete(t.id);
+        trimmed.add(t.session);
       }
+      return trimmed; // the sessions that lost turns: read them again when shown
     },
     /** Whether any turn of this session is held (for reloading its history after a prune). */
     hasSession: (session) => [...turns.values()].some((t) => t.session === session),

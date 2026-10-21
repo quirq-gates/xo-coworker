@@ -158,6 +158,7 @@ t("the connection line and the send block are honest", () => {
   assert.match(connLine({ ...ok, pools: { p: { state: "closed", resets_at: "2026-10-21T14:05:00Z" } } }).text, /^Paused until /);
   assert.equal(connLine({ ...ok, pools: { p: { state: "warn" } } }), null, "warn only holds later work: no line");
   assert.equal(sendBlock({ ...ok, loaded: false }), "Connecting to XO…");
+  assert.equal(connLine({ ...ok, error: null, errorCode: null }), null, "a recovered state has no line");
 });
 await (async () => {
   let peak = 0, now = 0;
