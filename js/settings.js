@@ -19,6 +19,17 @@ export function createSettings({ world, announce, PROJ, onChange }) {
   const R = { router: null, models: [], rules: null, defaults: [], trees: null, reported: [], busy: new Set(), err: {}, form: null, confirm: null, keyHint: {} };
 
   const box = (id) => document.querySelector(`[data-page="${id}"] .set-live`);
+  /** Re-draw a page and put keyboard focus back on the same control (by its data-* key), never on <body>. */
+  function keepFocus(id, draw) {
+    const el = box(id), a = document.activeElement;
+    let sel = null;
+    if (el && a && el.contains(a)) {
+      const d = [...a.attributes].find((x) => x.name.startsWith("data-"));
+      sel = d ? `[${d.name}="${CSS.escape(d.value)}"]` : a.name ? `[name="${CSS.escape(a.name)}"]` : null;
+    }
+    draw();
+    if (sel) { const b = el.querySelector(sel); if (b) b.focus({ preventScroll: true }); else el.closest("[data-page]")?.querySelector("h2")?.focus?.(); }
+  }
   const demoNote = (what) => `<p class="set-empty"><b>Live only.</b> ${what} come from your XO Space; Demo has none.</p>`;
 
   // ── Routing ─────────────────────────────────────────────────────────────
@@ -27,7 +38,8 @@ export function createSettings({ world, announce, PROJ, onChange }) {
     catch (err) { R.err.routing = err.message; }
     renderRouting();
   }
-  function renderRouting() {
+  const renderRouting = () => keepFocus("routing", drawRouting);
+  function drawRouting() {
     const el = box("routing");
     if (!el) return;
     routeSig = routingSig();
@@ -98,7 +110,8 @@ export function createSettings({ world, announce, PROJ, onChange }) {
     } catch (err) { R.err.rules = err.message; }
     renderRules();
   }
-  function renderRules() {
+  const renderRules = () => keepFocus("rules", drawRules);
+  function drawRules() {
     const el = box("rules");
     if (!el) return;
     if (!live) { el.innerHTML = demoNote("Your rules"); return; }
@@ -137,7 +150,8 @@ export function createSettings({ world, announce, PROJ, onChange }) {
       (l.commits ? `<p>${l.commits} commit${l.commits === 1 ? "" : "s"} only on ${esc(l.branch || "its branch")}</p>` : "") +
       (files.length ? `<pre class="tb-out">${esc(files.slice(0, 30).join("\n"))}${files.length > 30 ? `\n… ${files.length - 30} more` : ""}</pre>` : "") + `</div>`;
   }
-  function renderTrees() {
+  const renderTrees = () => keepFocus("worktrees", drawTrees);
+  function drawTrees() {
     const el = box("worktrees");
     if (!el) return;
     if (!live) { el.innerHTML = demoNote("Worktrees"); return; }
@@ -190,7 +204,7 @@ export function createSettings({ world, announce, PROJ, onChange }) {
   // while the Routing page is open, show what the stream changed (never mid-form or mid-question)
   if (live && world.subscribe) world.subscribe(() => {
     const page = box("routing")?.closest("[data-page]");
-    if (!R.router || R.form || R.confirm || !page || page.hidden || document.querySelector("#settings").hidden) return;
+    if (!R.router || R.form || (R.confirm && R.confirm.dm) || !page || page.hidden || document.querySelector("#settings").hidden) return;
     const sig = routingSig();
     if (sig !== routeSig) { routeSig = sig; renderRouting(); }
   });

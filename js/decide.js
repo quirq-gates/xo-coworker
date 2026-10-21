@@ -27,7 +27,9 @@ const BIG_CHECK = `<svg viewBox="0 0 52 52" aria-hidden="true"><circle class="sc
 const BIG_BACK = `<svg viewBox="0 0 52 52" aria-hidden="true"><circle class="sc" cx="26" cy="26" r="23"/><path class="sk" d="M21 30l-6-6 6-6M15 24h14a7 7 0 0 1 0 14h-4"/></svg>`;
 const MARK = (s) => (s === "done" ? "✓" : s === "doing" ? "✱" : "○");
 // capitalise a plain lowercase sentence ("the agent asks…"), never a name or a path ("perm-test.txt")
-const cap = (s) => { const t = String(s || ""); return /^[a-z]+ /.test(t) ? t.charAt(0).toUpperCase() + t.slice(1) : t; };
+// a sentence starting with a command ("git push…", "npm install…") stays as written
+const COMMANDS = new Set(["git", "npm", "npx", "pnpm", "yarn", "bun", "deno", "node", "python", "python3", "pip", "pip3", "uv", "rm", "mv", "cp", "ls", "cd", "cat", "curl", "wget", "make", "docker", "kubectl", "go", "cargo", "rustc", "sudo", "chmod", "chown", "mkdir", "touch", "sed", "awk", "grep", "find", "ssh", "scp", "tar", "brew", "apt", "gh", "terraform"]);
+const cap = (s) => { const t = String(s || "").trim(); const w = (t.match(/^[a-z]+(?= )/) || [])[0]; return w && !COMMANDS.has(w) ? t.charAt(0).toUpperCase() + t.slice(1) : t; };
 const ord = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
 
 export function createDecisions({ world, P, rules, PROJ, announce, render, later, waitSince, absorbing, onOpenThread, onAllClear, onUndone, onBreak, onSent, onNotSent }) {
@@ -90,6 +92,11 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     return rank(out);
   }
 
+  /** Was the item decided by this very request (same idempotency key)? */
+  const ownDecision = (part, err) => {
+    const k = part.choice && part.choice.body && part.choice.body.idempotency_key;
+    return !!k && !!(err.item && err.item.decision && err.item.decision.idempotency_key === k);
+  };
   /** A title as a sentence: one full stop, never "token?." */
   const stop = (t) => { t = String(t || "").trim(); return /[.?!…]$/.test(t) ? t : `${t}.`; };
   /** Why a decision wasn't sent: the item had already left the list (decided, withdrawn, expired). */
@@ -102,7 +109,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   }
   /** The same, short, for the herald. */
   function failShort(err) {
-    if (err && err.code === "secret_needs_a_call") return "XO can't carry a secret here. Reply in the thread.";
+    if (err && err.code === "secret_needs_a_call") return "XO can't carry a secret here. Give it outside XO, then tell the thread.";
     if (err && err.code === "rule_sentence_mismatch") return "The rule's wording changed. It's back in your list.";
     if (err && err.status >= 400 && err.status < 500 && err.message) return `${stop(err.message)} It's back in your list.`;
     return "It didn't reach the agent. It's back in your list.";
@@ -110,7 +117,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   /** A decision XO refused: the server's reason, and whether it can simply be tried again. */
   function failLine(part, err) {
     const t = stop(part.ask.title);
-    if (err && err.code === "secret_needs_a_call") return `Not sent: ${t} XO can't pass a secret to this question; give it to the agent another way, with a reply in the thread.`;
+    if (err && err.code === "secret_needs_a_call") return `Not sent: ${t} XO can't pass a secret to this question. Don't paste it into the thread: give it to the agent outside XO, then tell the thread it's done.`;
     if (err && err.code === "rule_sentence_mismatch") return `Not sent: ${t} The rule's wording has changed; read it again and decide. It's back in your list.`;
     if (err && err.status >= 400 && err.status < 500 && err.message) return `Not sent: ${t} ${stop(err.message)} It's back in your list.`;
     return `Didn't reach the agent: ${t} It's back in your list.`;
@@ -141,6 +148,11 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
           if (ok) {
             part.entry.status = "sent";
             if (part.stopped) stoppedDone.add(part.t.id); else sentKeys.set(part.key, Date.now());
+            onSent && onSent(part);
+          } else if (err && err.gone && ownDecision(part, err)) {
+            // it was this very decision (sent before an error said otherwise): it counts as sent
+            part.entry.status = "sent";
+            sentKeys.set(part.key, Date.now());
             onSent && onSent(part);
           } else if (err && err.gone) {
             // refused because the item had already left: never counted as made (UI-reference §4.3 #7)
@@ -428,8 +440,8 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     let act = "";
     if (it.kind === "question" && noSecret.has(it.id) && qs.some((q) => q.secret)) {
       // XO refused to carry a secret to this question (secret_needs_a_call): it can't be answered here
-      return `<p class="c-iwhy">${ICON.lock}<span>XO can't pass a secret to this question. Give it to the agent another way: a reply in the thread replaces this question.</span></p>` +
-        `<div class="c-btns one"><button type="button" class="b b-reply" data-act="thread"><span class="b-l">${ICON.edit}Reply in the thread</span></button></div>`;
+      return `<p class="c-iwhy">${ICON.lock}<span>XO can't pass a secret to this question. Don't paste it into the thread: XO keeps what's written there. Give it to the agent outside XO (for example in its environment), then tell the thread it's done; your reply replaces this question.</span></p>` +
+        `<div class="c-btns one"><button type="button" class="b b-reply" data-act="thread"><span class="b-l">${ICON.arrow}Open the thread</span></button></div>`;
     }
     if (it.kind === "question") {
       // one plain choice is one press, unless it's destructive: then it's picked, then held
@@ -644,6 +656,22 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     };
     frame._allow = tryAllow;
     frame._hint = (text) => hint(el, text);
+    // the card's letter keys paused (see cardKeys): the reason stays on the card until they are back
+    frame._quietOn = (text) => {
+      frame._quiet = true;
+      const h = el.querySelector(".c-hint");
+      h.textContent = `${text} Its keys are paused while you type: press Esc or click the card to use them again.`;
+      h.classList.remove("show"); h.classList.add("stay");
+    };
+    frame._quietOff = () => {
+      if (!frame._quiet) return false;
+      frame._quiet = false;
+      const h = el.querySelector(".c-hint");
+      h.classList.remove("stay"); h.textContent = "";
+      return true;
+    };
+    frame.addEventListener("pointerdown", () => frame._quietOff());
+    frame.addEventListener("focusout", (e) => { if (!frame.contains(e.relatedTarget)) frame._quietOff(); });
     frame._n = n;
 
     const qform = el.querySelector("[data-qform]");
@@ -907,6 +935,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   function cardKeys(e, card, { onEsc, inPanel }) {
     const inField = e.target.matches?.("textarea, input");
     if (e.key === "Escape") {
+      if (card && card._quietOff && card._quietOff()) { e.preventDefault(); e.stopPropagation(); return true; }
       if (card && card._noting && card._noting()) { e.preventDefault(); e.stopPropagation(); card._closeNote(); return true; }
       if (onEsc) { e.preventDefault(); e.stopPropagation(); onEsc(); return true; }
       return false;
@@ -917,10 +946,11 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (!n) return false;
     const k = e.key;
     const own = () => { e.preventDefault(); e.stopPropagation(); };
-    // after a refused key (someone starting to type where no text box opened), the card's letter
-    // keys stay quiet while the typing goes on, so words never land as a decision
-    if (card._quietUntil > performance.now() && k.length === 1) { own(); card._quietUntil = performance.now() + 700; return true; }
-    const refuse = (text) => { card._hint(text); card._quietUntil = performance.now() + 1500; };
+    // after a refused key (someone starting to type where no text box opened), the card's letter keys
+    // stay off until a deliberate reset (Esc, a click on the card, or leaving it), so typed words can
+    // never land as a decision, however long the pause between them
+    if (card._quiet && k.length === 1) { own(); return true; }
+    const refuse = (text) => card._quietOn(text);
     const it = n.ask.item;
     if (K.is(e, "allow")) { own(); card._allow(); }
     else if (K.is(e, "back")) {
@@ -967,6 +997,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (!card || !n) return;
     const k = e.key;
     const own = () => { e.preventDefault(); e.stopPropagation(); };
+    if (card._quiet && k.length === 1) { own(); return; }
     if (K.is(e, "allowAll")) { own(); confirmAll(); return; }
     if (K.is(e, "later") && n.effort === "think") { own(); setLater(); return; }
     if (K.is(e, "next") || k === "ArrowRight") { own(); skip(1); return; }

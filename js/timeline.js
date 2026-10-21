@@ -225,3 +225,26 @@ export async function mapLimit(items, cap, fn) {
   const run = async () => { while (list.length) await fn(list.shift()); };
   await Promise.all(Array.from({ length: Math.min(cap, list.length) }, run));
 }
+
+/**
+ * A hop as one quiet line in a thread (ch 11 §16), said from who sent it to whom, from the hop's own
+ * roles: forward, relay, brief, ask, status, answer. project: the thread's project name.
+ */
+export function hopLine(h, project) {
+  const who = (role) => ({ thread: "this thread", "project-coordinator": `the ${project} coordinator`, "workspace-coordinator": "the Workspace", xo: "XO", owner: "you", person: "you" })[role] || "someone";
+  const from = who(h.from_role), to = who(h.to_role);
+  const state = h.state === "sent" ? " · not taken up yet" : h.state === "answered" ? " · answered" : "";
+  const up = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+  const via = h.via || [];
+  // a coordinator or XO acting for this thread says so
+  const forThread = via.includes("thread") && h.from_role !== "thread" && h.to_role !== "thread" ? " on behalf of this thread" : "";
+  switch (h.kind) {
+    case "forward": return `Forwarded by the Workspace${state}`;
+    case "brief": return `${via.includes("workspace") ? "Forwarded by the Workspace, via the project" : `From ${from}`}${state}`;
+    case "relay": return h.from_role === "project-coordinator" && h.to_role === "thread" ? `The ${project} coordinator passed on your message${state}` : `${up(from)} wrote to ${to}${forThread}${state}`;
+    case "ask": return `${up(from)} asked ${to}${forThread}${state}`;
+    case "status": return `${up(from)} reported back to ${to}${state}`;
+    case "answer": return `${up(from)} answered ${to}`;
+    default: return "";
+  }
+}

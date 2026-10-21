@@ -56,7 +56,7 @@ export function stormSource(state, emit, event) {
   let stream = null;
   let statusT = null, runtimesT = null, recoverT = null;
   let chatsAt = 0, chatsBusy = null;
-  const watched = { projects: new Set(), thread: null }; // what's on screen, to reload after a reset
+  const watched = { projects: new Set(), thread: null, session: null }; // what's on screen, to reload after a reset
   const trimmed = new Set(); // sessions whose older turns were pruned (read again when shown)
   let firstFrame = null;
   const sawFrame = new Promise((r) => { firstFrame = r; });
@@ -217,7 +217,8 @@ export function stormSource(state, emit, event) {
   function noteSession(s) {
     const old = state.sessions[s.id];
     if (old && old.seq != null && s.seq != null && old.seq > s.seq) return;
-    state.sessions[s.id] = { ...(old || {}), id: s.id, role: s.role, chat_id: s.chat_id, thread_ts: s.thread_ts, state: s.state, agent: s.agent, model: s.model, effort: s.effort, paused: s.paused || null, retired_at: s.retired_at || null, seq: s.seq ?? null };
+    // the whole Session (a plain chat needs its native_id, cwd and permission_mode)
+    state.sessions[s.id] = { ...(old || {}), ...s, paused: s.paused || null, retired_at: s.retired_at || null, seq: s.seq ?? null };
   }
   async function loadReview() {
     try {
@@ -417,7 +418,8 @@ export function stormSource(state, emit, event) {
         if (d.reason === "created") Object.assign(next, { role: d.role, agent: d.agent, preset: d.preset });
         if (d.reason === "paused") next.paused = d.why || "paused";
         if (d.reason === "resumed") next.paused = null;
-        if (d.reason === "updated") Object.assign(next, { model: d.model ?? old.model, effort: d.effort ?? old.effort });
+        if (d.reason === "updated") Object.assign(next, { model: d.model ?? old.model, effort: d.effort ?? old.effort, permission_mode: d.permission_mode ?? old.permission_mode });
+        if (d.reason === "attached" && d.native_id) next.native_id = d.native_id;
         if (d.reason === "retired") next.retired_at = env.ts || new Date().toISOString();
         // PR 24: an unconfirmed "send now" was added to the running turn instead
         if (d.reason === "now_became_add") event({ kind: "now_became_add", session: id, wakes: d.wakes || [], runs: d.runs || 0 });
@@ -574,6 +576,7 @@ export function stormSource(state, emit, event) {
     const keep = new Set();
     const t = watched.thread && rawThreads.get(watched.thread);
     if (t && t.session_id) keep.add(t.session_id);
+    if (watched.session) keep.add(watched.session); // an open plain chat keeps its turns
     for (const sid of state.turns.prune(keep)) trimmed.add(sid);
     // sub-agents: keep every live one and the open thread's; the rest only up to a bounded log
     const ended = [...state.runs.values()].filter((r) => !["running", "waiting"].includes(r.state) && !keep.has(r.session));
@@ -682,6 +685,10 @@ export function stormSource(state, emit, event) {
       /** The open conversations: load their timelines once; the stream keeps them current. */
       watch: (projects) => { watched.projects = new Set((projects || []).filter(Boolean)); for (const p of watched.projects) loadTimeline(p); },
       watchThread: (ts) => { watched.thread = ts || null; if (ts) loadThread(ts); },
+      /** An open plain chat: its session's turns are never pruned while it is on screen. */
+      watchSession: (sid) => { watched.session = sid || null; },
+      /** Were this session's older turns pruned? (then read them again; asking clears it) */
+      takeTrimmed: (sid) => trimmed.delete(sid),
       loadOlder,
       replying: (project) => {
         const aw = state.awaiting[project];

@@ -468,6 +468,7 @@ body.panel-open .conv{--rp:calc(var(--pw) + 28px)}
 .m-you.is-failed .bubble{border-style:dashed;border-color:color-mix(in srgb,var(--err) 65%,var(--line))}
 .meta{display:flex;align-items:center;gap:7px;margin-top:5px;padding-right:4px;font-size:var(--fs-sm);color:var(--ink-4);font-variant-numeric:tabular-nums}
 .meta.is-err{color:var(--err-ink);font-weight:500}
+.meta.is-warn{color:var(--warn)}
 .sent{display:inline-flex;align-items:center;gap:3px;color:var(--ink-3)}
 .sent svg{width:13px;height:13px;color:var(--accent)}
 .tk{stroke-dasharray:24;stroke-dashoffset:24;animation:draw .36s var(--glide) .05s forwards}
@@ -826,6 +827,7 @@ body.panel-open .dock{right:calc(var(--pw) + 24px)}
 .c-note{margin-top:2px}
 .c-hint{min-height:0;margin-top:0;font-size:var(--fs-base);color:var(--ink-3);text-align:center;opacity:0;height:0;overflow:hidden}
 .c-hint.show{height:auto;margin-top:8px;animation:hint 3.2s ease forwards}
+.c-hint.stay{height:auto;margin-top:8px;opacity:1;color:var(--ink-2)}
 @keyframes hint{0%{opacity:0}8%,80%{opacity:1}100%{opacity:0}}
 
 /* the thread's own card: Today's wide layout (#20) */
@@ -1403,7 +1405,7 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
   body.panel-open .scroller,body.panel-open .home{padding-right:16px}
   .conv,body.panel-open .conv{--rp:0px;--gut:16px;--hg:16px}
   body.panel-open .dock{right:0}
-  body.panel-open .main::after,body:has(#iq-pop.is-sheet:not([hidden])) .main::after{content:"";position:absolute;inset:0;z-index:15;background:rgb(0 0 0 / calc(.45 * var(--sha)));-webkit-backdrop-filter:blur(1.5px);backdrop-filter:blur(1.5px);animation:fade .2s}
+  body.panel-open .main::after,body:has(#iq-pop.is-sheet:not([hidden])) .main::after,body:has(#cs-pop.is-sheet:not([hidden])) .main::after{content:"";position:absolute;inset:0;z-index:15;background:rgb(0 0 0 / calc(.45 * var(--sha)));-webkit-backdrop-filter:blur(1.5px);backdrop-filter:blur(1.5px);animation:fade .2s}
   .panel{position:fixed;top:auto;left:0;right:0;bottom:0;max-height:91dvh;width:auto;border-radius:24px 24px 0 0;border-bottom:0;padding-bottom:max(44px,env(safe-area-inset-bottom))}
   .panel.is-in{animation:sheet-up .32s var(--glide) both}
   .panel.is-out{animation:sheet-down .22s ease-in forwards}
@@ -1696,6 +1698,14 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .iq-row.lv .iq-n{flex:none}
 .iq-row.lv .iq-tr{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .iq-pip.is-flat{width:auto;padding:0 8px;font-size:var(--fs-xs);color:var(--ink-3)}
+/* live: a model's efforts come from the catalog (up to five); each pip is one effort */
+.iq-row.lv .iq-d{width:auto}
+.iq-row.lv .iq-pip{flex:none;width:34px}
+@media (max-width:760px){
+  .iq-row.lv{flex-wrap:wrap;row-gap:2px;padding-top:6px;padding-bottom:6px}
+  .iq-row.lv .iq-d{flex-basis:100%;padding-left:24px}
+  .iq-row.lv .iq-pip{width:44px;height:36px}
+}
 
 /* ── Chats: plain chats with one agent (U1) ───────────────────────────────── */
 .ch-list{list-style:none;display:flex;flex-direction:column;gap:6px;margin:6px 0 24px}
@@ -1705,6 +1715,7 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .ch-t{font:550 var(--fs-md)/1.35 var(--sans);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ch-m{font-size:var(--fs-sm);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ch-a{flex:none;font-size:var(--fs-sm);color:var(--ink-4);font-variant-numeric:tabular-nums}
+.ch-a.is-need{color:var(--warn);font-weight:600}
 .ch-calm{margin-top:12px}
 .tg-ch{margin-left:6px;color:var(--ink-2);text-decoration:underline;text-decoration-color:var(--g45);text-underline-offset:2px}
 .cs-pop{max-height:min(640px,80vh);overflow-y:auto}
@@ -1729,3 +1740,9 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
   #say{min-height:36px}
 }
 @media (max-width:760px){.hr-ev.k-stopped .hr-s{display:block;min-width:0;white-space:nowrap}}
+/* Send now: its own toggle beside a running chat's line; pressed, it reads as a choice you made */
+.tg-now{flex:none;display:inline-flex;align-items:center;height:30px;padding:0 12px;margin-right:6px;border-radius:999px;border:1px solid var(--g26);color:var(--ink-3);font:500 var(--fs-sm)/1 var(--sans);transition:background var(--dur-fast),color var(--dur-fast),border-color var(--dur-fast)}
+.tg-now:hover{color:var(--ink);border-color:var(--g33)}
+.tg-now.is-on{background:var(--ink);border-color:var(--ink);color:var(--canvas)}
+.tg-now-on{color:var(--ink)}
+@media (max-width:760px){.tg-now{height:36px}.cs-f select{height:36px}}

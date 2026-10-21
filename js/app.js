@@ -23,7 +23,7 @@ import { createNight } from "./night.js";
 import { createIntel } from "./intel.js";
 import { EFFORT, HELD_SEED, estLine, evidenceFor } from "./content.js";
 import { ICON, XO, NEXT_GLYPH, $, $$, RM, clock, dayOf, short, elapsed, reconcile, sound, wait, dial, morph, expand, shifted } from "./ui.js";
-import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText } from "./timeline.js";
+import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText, hopLine } from "./timeline.js";
 import { turnHtml } from "./turnview.js";
 import { itemParts } from "./review.js";
 import { runsStripHtml, runsListHtml, runViewHtml } from "./runsview.js";
@@ -68,6 +68,7 @@ const S = {
   dockFold: {},
   showHops: (() => { try { return localStorage.getItem("cv-hops") === "1"; } catch { return false; } })(),
   tbOpen: {},              // storm blocks opened by the person (by block id, or row:<call id>)
+  stops: new Map(),        // live Stops by session: waiting out their Undo, or on their way
   tEdit: null,             // a thread header field being edited: {tid, field: "title"|"label"}
   recording: null, keyErr: null,  // Settings › Keyboard: the action waiting for a new key, and why the last one was refused            // asks folded away in their thread so you can read it first (by ask key)
   local: {}, alias: new Map(), localThread: new Map(),
@@ -159,7 +160,12 @@ const IQ = createIntel({
   record: (session, rec) => recordLine(session, rec),
 });
 
-const CH = createChats({ world, announce, heraldShow: (...a) => heraldShow(...a), go: (...a) => go(...a), schedule: () => schedule() });
+const CH = createChats({
+  world, announce, heraldShow: (...a) => heraldShow(...a), go: (...a) => go(...a), schedule: () => schedule(),
+  view: () => S.view,
+  // a new chat that was refused: your words go back into an empty composer on the Chats page
+  restore: (text) => { if (S.view === "chats" && !say.value.trim()) { say.value = text; growSay(); saveDraft(); updateComposer(); } },
+});
 world.ui = { tbOpen: S.tbOpen }; // turn blocks open or folded, shared with the Chats view
 
 // ── world helpers ───────────────────────────────────────────────────────────
@@ -685,7 +691,7 @@ function liveMessagesOf(conv) {
   if (t && S.showHops && st.hops) {
     for (const hp of st.hops.values()) {
       if (hp.thread_ts !== t.id) continue;
-      const text = hopLine(hp, t);
+      const text = hopLine(hp, PROJ(t.project));
       if (text) out.push({ key: `hop:${hp.id}`, at: Date.parse(hp.at || hp.created_at) || 0, seq: hp.seq ?? null, who: "system", text });
     }
   }
@@ -711,20 +717,6 @@ function liveMessagesOf(conv) {
 }
 
 /** One hop as a quiet line (11 §16.2's labels). Their content stays theirs: we say who, not what. */
-function hopLine(h, t) {
-  const via = h.via || [];
-  const state = h.state === "sent" ? " · not taken up yet" : h.state === "answered" ? " · answered" : "";
-  const pc = `${PROJ(t.project)} coordinator`;
-  switch (h.kind) {
-    case "brief": return `${via.includes("workspace") ? "Forwarded by the workspace, via the project" : `From the ${pc}`}${state}`;
-    case "relay": return `The ${pc} passed on your message${state}`;
-    case "ask": return h.from_role === "thread" ? `Asked the ${pc}${state}` : h.to_role === "workspace-coordinator" ? `Asked the workspace on behalf of this thread${state}` : `The ${pc} asked this thread${state}`;
-    case "status": return `Reported back to the ${pc}${state}`;
-    case "answer": return h.to_role === "thread" ? `The ${pc} answered` : `Answered the ${pc}`;
-    case "forward": return `Forwarded by the workspace${state}`;
-    default: return "";
-  }
-}
 function messagesOf(conv, needs) {
   if (!DEMO) return liveMessagesOf(conv);
   const out = [];
@@ -806,7 +798,7 @@ function msgItems(conv, needs) {
       else if (m === lastYou && (m.status === "sent" || m.sent)) meta = `<div class="meta"><time>${clock(m.at)}</time><span class="sent">Sent ${ICON.check}</span></div>`;
       let route = "";
       if (m.waiting) route = `<div class="route-row"><i class="dash" aria-hidden="true"></i>Sent to <b>${esc(m.target === "workspace" ? "the coordinator" : PROJ(m.target))}</b> · waiting for a thread</div>`;
-      else if (m.fwd) route = `<div class="route-row">${ICON.arrow}<span>Forwarded by the <button type="button" class="rt-go" data-go="ws"><b>Workspace</b></button>${(m.fwd.via || []).length > 1 ? ", via the project" : ""}</span></div>`;
+      else if (m.fwd) route = `<div class="route-row">${ICON.arrow}<span>Forwarded by the <button type="button" class="rt-go" data-go="ws"><b>Workspace</b></button></span></div>`;
       else if (m.routed && m.routed.length) route = `<div class="route-row">${ICON.arrow}<span>Routed to ${[...new Set(m.routed.map((r) => r.chat))].map((c) => `<button type="button" class="rt-go" data-go="p:${esc(c)}"><b>${esc(PROJ(c))}</b></button>`).join(", ")}</span></div>`;
       html = `<div class="m m-you${cont ? " cont" : ""}${m.status === "failed" ? " is-failed" : ""}${m.status === "sending" ? " is-pending" : ""}"><div class="bubble" title="${esc(clock(m.at))}">${esc(m.text)}</div>${meta}${route}</div>`;
     } else if (m.who === "coord" || m.who === "agent") {
@@ -1004,7 +996,7 @@ function checklistRender(needs) {
 
 // ── sub-agents (U2, ch 14 §11): working now under the checklist; the list and each run in a sheet ──
 const LIVE_RUN = (r) => r.state === "running" || r.state === "waiting";
-const runsAsked = new Map(); // session → when its runs were last listed for the strip
+const runsAsked = new Map(); // session → the working count its runs were last listed for
 function runsStrip(t) {
   if (DEMO || !t.sessionId || !world.state.runs) return "";
   const mine = [...world.state.runs.values()].filter((r) => r.session === t.sessionId && !r.hidden);
@@ -1012,8 +1004,9 @@ function runsStrip(t) {
   // after a reload the stream hasn't named the runs still working: the thread's counts know, so list them
   const lr = (world.state.liveRuns || {})[t.sessionId];
   const working = Math.max((t.runs && (t.runs.running || 0) + (t.runs.waiting || 0)) || 0, lr ? lr.running + lr.waiting : 0, (t.session && t.session.live_runs) || 0);
-  if (working > mine.filter(LIVE_RUN).length && Date.now() - (runsAsked.get(t.sessionId) || 0) > 15000) {
-    runsAsked.set(t.sessionId, Date.now());
+  // asked once per count: if the thread's counts stay stale after a read, the read isn't repeated
+  if (working > mine.filter(LIVE_RUN).length && runsAsked.get(t.sessionId) !== working) {
+    runsAsked.set(t.sessionId, working);
     world.act.listRuns(t.sessionId).then(() => schedule(), () => {});
   }
   const total = Math.max((t.runs && t.runs.total) || 0, mine.length);
@@ -1080,6 +1073,8 @@ async function readTranscript(id, gen) {
       RS.items.push(...(d.items || []).filter((i) => !have.has(i.id)));
       if (d.next) RS.cursor = d.next;
       more = !!d.next && (d.items || []).length > 0;
+      // a long transcript shows as each page arrives, not after the last one
+      if (more) { RS.loading = false; RS.keepScroll = true; runsRender(); }
     }
   } catch (err) {
     if (!mine()) return;
@@ -1108,7 +1103,7 @@ function stopRunsUndo(what, fn) {
   const showPending = () => {
     const left = pendingStops.filter((j) => !j.cancelled);
     if (!left.length) return;
-    heraldShow({ kind: "halt", text: "Stopping", sub: left.map((j) => j.what).join(", "), undo: () => { for (const j of left) j.cancelled = true; pendingStops.length = 0; announce(left.length > 1 ? "Not stopped. They keep working." : "Not stopped."); } }, Kit.COMMIT_MS);
+    heraldShow({ kind: "halt", tag: "runstop", text: "Stopping", sub: left.map((j) => j.what).join(", "), undo: () => { for (const j of left) j.cancelled = true; pendingStops.length = 0; announce(left.length > 1 ? "Not stopped. They keep working." : "Not stopped."); } }, Kit.COMMIT_MS);
   };
   showPending();
   announce(`Stopping ${what} in 3 seconds. Undo to keep it.`);
@@ -1117,7 +1112,7 @@ function stopRunsUndo(what, fn) {
     if (i >= 0) pendingStops.splice(i, 1);
     if (job.cancelled) return;
     // its Undo is over: the herald keeps only the stops still waiting (or clears, for the result)
-    if (pendingStops.some((j) => !j.cancelled)) showPending(); else if (S.herald && S.herald.kind === "halt" && S.herald.undo) S.herald = null;
+    if (pendingStops.some((j) => !j.cancelled)) showPending(); else if (S.herald && S.herald.tag === "runstop") S.herald = null;
     try {
       const r = await fn();
       // 202: a stop was sent (its run.finished confirms it); 200 with nothing to stop: it had ended
@@ -1150,9 +1145,12 @@ const tdock = $("#tdock");
 const TD = { key: null, busy: false };
 const keepBottom = () => { if (stuck && rendered && rendered !== "home") toBottom(false); };
 function dockRender(needs) {
-  if (CH.isChats(S.view)) { const h = CH.confirmHtml(); if (tdock._ch !== h) { tdock.innerHTML = h; tdock._ch = h; TD.key = null; } return; }
-  if (tdock._ch) { tdock._ch = ""; tdock.innerHTML = ""; }
-  const t = convThread(S.view);
+  // a chat: its "send now" question first, else its own open decision (the chat's host), as a thread docks one
+  const hc = CH.isChats(S.view) ? CH.confirmHtml(S.view) : "";
+  if (hc) { if (tdock._ch !== hc) { tdock.innerHTML = hc; tdock._ch = hc; TD.key = null; } return; }
+  if (tdock._ch) { tdock._ch = ""; tdock.innerHTML = ""; TD.key = null; }
+  if (S.view === "chats") { if (TD.key) { TD.key = null; tdock.innerHTML = ""; } return; }
+  const t = convThread(S.view) || (S.view.startsWith("c:") ? (world.state.hosts || []).find((h) => h.id === `session:${S.view.slice(2)}`) : null);
   const n = t && !D.isOpen() && !sealed() ? needs.find((x) => x.t.id === t.id && !x.later && (x.admitted || x.held)) : null;
   // Folded: the person chose to read the thread first. The ask waits as one slim line, and the
   // conversation isn't dimmed. A new ask on this thread docks open again.
@@ -1188,7 +1186,8 @@ function dockRender(needs) {
   const inner = tpl.content.firstElementChild;
   frame.appendChild(inner);
   frame.setAttribute("aria-labelledby", inner.querySelector(".c-h").id);
-  frame.insertAdjacentHTML("beforeend", `<button type="button" class="dock-hide" data-fold="${esc(n.key)}" title="Fold it away and read the thread first">${ICON.chevron}<span>Read the thread first</span></button>`);
+  const what = t.host ? "chat" : "thread";
+  frame.insertAdjacentHTML("beforeend", `<button type="button" class="dock-hide" data-fold="${esc(n.key)}" title="Fold it away and read the ${what} first">${ICON.chevron}<span>Read the ${what} first</span></button>`);
   morph(tdock, () => { tdock.innerHTML = ""; tdock.appendChild(frame); }, { duration: prev ? 300 : 360, fade: frame });
   D.wireCard(frame, inner, n, {
     surface: "dock",
@@ -1258,8 +1257,11 @@ setInterval(tickElapsed, 1000);
 // ── the dock line: one calm labelled line (no glow on the composer, ever) ───
 const OWN = new Set(["sent", "started", "ready", "clear", "rec", "rule", "halt"]);
 function heraldShow(h, ms = 4200) {
-  // a herald of your own action holds its place, except for a correction of it ("Not sent")
-  if (!h.force && S.herald && S.herald.until > Date.now() && (OWN.has(S.herald.kind) || S.herald.undo) && !OWN.has(h.kind) && !h.undo) return;
+  const cur = S.herald && S.herald.until > Date.now() ? S.herald : null;
+  // a correction ("Not sent") replaces your own action's line, but never one still holding an Undo:
+  // it waits until that Undo is over, so the Undo stays in reach
+  if (h.force && cur && cur.undo && !h.undo) { clearTimeout(heraldShow.wait); heraldShow.wait = setTimeout(() => heraldShow(h, ms), cur.until - Date.now() + 60); return; }
+  if (!h.force && cur && (OWN.has(cur.kind) || cur.undo) && !OWN.has(h.kind) && !h.undo) return;
   S.herald = { ...h, until: Date.now() + ms, n: (S.herald?.n || 0) + 1 };
   clearTimeout(heraldShow.t);
   heraldShow.t = setTimeout(schedule, ms + 40);
@@ -1353,9 +1355,8 @@ function growSay() {
 function running() {
   if (!DEMO) {
     // live: a thread whose session works, or the coordinator of this chat while it works
-    if (S.stopping) return null; // a Stop is waiting out its Undo, or on its way
-    // a session already stopping has nothing more to stop
-    const live = (run) => (run && world.act.sessionState(run.session) !== "stopping" ? run : null);
+    // nothing more to stop where a Stop waits out its Undo or is on its way, or the session is stopping
+    const live = (run) => (run && !S.stops.has(run.session) && world.act.sessionState(run.session) !== "stopping" ? run : null);
     const t = convThread(S.view);
     if (t) return t.busy && t.sessionId ? live({ kind: "thread", t, session: t.sessionId }) : null;
     if (S.view.startsWith("c:")) return CH.busy(S.view) ? live({ kind: "chat", session: S.view.slice(2) }) : null;
@@ -1383,10 +1384,16 @@ function sendRender() {
   btn.setAttribute("aria-label", run ? (run.kind === "coord" ? "Stop the reply" : "Stop this run") : "Send");
   btn.title = run ? (run.kind === "coord" ? "Stop the coordinator" : "Stop the agent (it keeps what's done)") : "Send (Enter)";
 }
+/** A chat's line above the composer and its Send now toggle, which follow the chat's own state. */
+function chatTargetRender() {
+  sendNowRender();
+  if (!CH.isChats(S.view)) return false;
+  const html = liveBlock() ? `<span class="tg-warn">${ICON.pause}</span><span>Sending is paused · ${esc(liveBlock())}</span>` : CH.targetHtml(S.view);
+  if ($("#target")._h !== html) { $("#target").innerHTML = html; $("#target")._h = html; }
+  return true;
+}
 function updateComposer() {
-  if (CH.isChats(S.view)) {
-    const html = liveBlock() ? `<span class="tg-warn">${ICON.pause}</span><span>Sending is paused · ${esc(liveBlock())}</span>` : CH.targetHtml(S.view);
-    if ($("#target")._h !== html) { $("#target").innerHTML = html; $("#target")._h = html; }
+  if (chatTargetRender()) {
     syncPlaceholder();
     $("#composer").classList.toggle("has-text", !!say.value);
     sendRender(); growSay(); atList.hidden = true;
@@ -1464,10 +1471,18 @@ atList.addEventListener("mousedown", (e) => { const li = e.target.closest("li");
 $("#composer").addEventListener("submit", (e) => { e.preventDefault(); if ($("#send").dataset.mode === "stop") stopRun(); else send(); });
 $("#target").addEventListener("click", () => {
   if (S.view === "chats") { CH.openSetup($("#target")); return; }
-  if (S.view.startsWith("c:")) { if (CH.busy(S.view)) { CH.toggleNow(S.view); updateComposer(); } say.focus(); return; }
+  if (S.view.startsWith("c:")) { say.focus(); return; }
   if (!/(^|\s)@/.test(say.value)) say.value = "@" + (say.value ? " " + say.value : "");
   say.focus(); say.setSelectionRange(1, 1); updateComposer();
 });
+/** "Send now": its own toggle, shown in a chat whose turn is running where the agent can be interrupted. */
+function sendNowRender() {
+  const b = $("#send-now");
+  const st = !DEMO && CH.isChats(S.view) && !liveBlock() ? CH.nowState(S.view) : null;
+  b.hidden = !st;
+  if (st) { b.setAttribute("aria-pressed", String(st.on)); b.classList.toggle("is-on", st.on); }
+}
+$("#send-now").addEventListener("click", () => { CH.toggleNow(S.view); updateComposer(); say.focus(); });
 $("#iq").addEventListener("click", () => { if (IQ.isOpen) IQ.close(); else IQ.open(sessionOf(S.view), $("#iq")); });
 
 /**
@@ -1475,20 +1490,21 @@ $("#iq").addEventListener("click", () => { if (IQ.isOpen) IQ.close(); else IQ.op
  * (POST /api/chat/abort). The turn's own record then says what ran: "Stopped after …".
  */
 function stopLive(run) {
-  const until = Date.now() + Kit.COMMIT_MS;
   const what = run.kind === "thread" ? run.t.title : run.kind === "chat" ? "This chat" : run.conv === "ws" ? "The coordinator" : `${PROJ(chatOf(run.conv))} coordinator`;
   // the turn you chose to stop: if it ends inside the window and another starts, that one is left alone
-  const token = { session: run.session, turn: world.act.turnOf(run.session), until, cancelled: false };
-  S.stopping = token;
-  heraldShow({ kind: "halt", text: "Stopping", sub: what, undo: () => { token.cancelled = true; S.stopping = null; announce("Not stopped. It keeps working."); schedule(); } }, Kit.COMMIT_MS);
+  const token = { session: run.session, turn: world.act.turnOf(run.session), what, until: Date.now() + Kit.COMMIT_MS, cancelled: false, sent: false };
+  S.stops.set(run.session, token);
+  stopsHerald();
   announce(`Stopping ${what} in 3 seconds. Undo to keep it working.`);
   sound.play("back");
   schedule();
   setTimeout(async () => {
     if (token.cancelled) return;
+    token.sent = true;
+    stopsHerald();
     const now = world.act.turnOf(token.session);
     if (token.turn && now !== token.turn) {
-      S.stopping = null;
+      S.stops.delete(token.session);
       heraldShow({ kind: "halt", text: "It had already finished", sub: now ? `${what} · its next turn goes on` : what }, 4200);
       announce(now ? "It had already finished that turn. The next one goes on; Stop again to end it." : "It had already finished.");
       schedule();
@@ -1501,10 +1517,21 @@ function stopLive(run) {
     } catch (err) {
       heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: err.message, undo: () => stopRun(), undoLabel: "Retry" }, 7000);
     } finally {
-      if (S.stopping === token) S.stopping = null;
+      if (S.stops.get(token.session) === token) S.stops.delete(token.session);
       schedule();
     }
   }, Kit.COMMIT_MS);
+}
+/** One herald for every Stop still in its Undo window, so a second Stop never hides the first one's Undo. */
+function stopsHerald() {
+  const waiting = [...S.stops.values()].filter((x) => !x.cancelled && !x.sent);
+  if (!waiting.length) { if (S.herald && S.herald.tag === "turnstop") { S.herald = null; schedule(); } return; }
+  const last = Math.max(...waiting.map((x) => x.until));
+  heraldShow({ kind: "halt", tag: "turnstop", text: "Stopping", sub: waiting.map((x) => x.what).join(", "), undo: () => {
+    for (const x of waiting) { x.cancelled = true; if (S.stops.get(x.session) === x) S.stops.delete(x.session); }
+    announce(waiting.length > 1 ? "Not stopped. They keep working." : "Not stopped. It keeps working.");
+    schedule();
+  } }, Math.max(300, last - Date.now()));
 }
 
 /** Stop: the run halts honestly; what's done is kept and said so. */
@@ -1733,6 +1760,7 @@ function render() {
   }
   dockRender(needs);
   heraldRender(needs);
+  chatTargetRender();
   syncPlaceholder();
   sendRender();
   chipRender();
@@ -1778,7 +1806,7 @@ function go(v, { from, focus = false } = {}) {
   const back = from && from.startsWith("t:");
   S.view = v;
   follow();
-  TD.key = null; tdock.innerHTML = "";
+  TD.key = null; tdock.innerHTML = ""; tdock._ch = "";
   const el = v === "home" ? $("#home") : $("#column");
   el.classList.remove("enter-r", "enter-l", "enter");
   void el.offsetWidth;
@@ -1803,7 +1831,8 @@ function liveReady(v) {
 function follow() {
   if (DEMO) return;
   const v = S.view, t = convThread(v);
-  if (CH.isChats(v)) { world.act.watch([]); world.act.watchThread(null); CH.open(v); return; }
+  if (CH.isChats(v)) { world.act.watch([]); world.act.watchThread(null); world.act.watchSession?.(v.startsWith("c:") ? v.slice(2) : null); CH.open(v); return; }
+  world.act.watchSession?.(null);
   if (t && S.showHops && world.act.loadHops) world.act.loadHops(t.id);
   world.act.watch(v === "home" || v === "ws" ? ["workspace"] : v.startsWith("p:") ? [v.slice(2)] : t ? [t.project] : []);
   world.act.watchThread(t ? t.id : null);
@@ -1932,9 +1961,10 @@ document.addEventListener("click", (e) => {
   if (t.closest("[data-herald-undo]")) { const u = S.herald?.undo; if (typeof u === "function") { S.herald.until = 0; schedule(); u(); } else if (u) undoRecord(u); return; }
   // Chats: "send now" would stop background tasks; a failed prompt
   const chc = t.closest("[data-chc]");
-  if (chc) { CH.resolveConfirm(chc.dataset.chc); return; }
+  if (chc) { CH.resolveConfirm(S.view, chc.dataset.chc); return; }
   const chr = t.closest("[data-chat-retry]");
   if (chr) { CH.retry(chr.dataset.chatRetry); return; }
+  if (e.target.closest("[data-chat-stop]")) { stopRun(); return; }
   // sub-agents: the strip under the checklist, the log, a sub-agent's row in a turn
   const rc = t.closest("[data-run-call]");
   if (rc) { const th = convThread(S.view); const r = [...(world.state.runs?.values() || [])].find((x) => x.spawn === rc.dataset.runCall); openRuns(th, r ? r.id : null); return; }
@@ -2311,7 +2341,9 @@ addEventListener("keydown", (e) => {
     if (!allEl.hidden) { closeAll(); return; }
     if ($("#app").classList.contains("drawer")) { setDrawer(false); return; }
     if (D.isOpen()) { D.close(); return; }
+    if (CH.setupOpen) { CH.closeSetup(); return; }
     if (S.view.startsWith("t:")) back();
+    else if (S.view.startsWith("c:")) go("chats");
     return;
   }
   if (e.target.matches?.("input, textarea, [contenteditable]") || e.metaKey || e.ctrlKey || e.altKey) return;
