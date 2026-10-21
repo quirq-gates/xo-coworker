@@ -28,6 +28,7 @@ import { turnHtml } from "./turnview.js";
 import { itemParts } from "./review.js";
 import { runsStripHtml, runsListHtml, runViewHtml } from "./runsview.js";
 import { createSettings } from "./settings.js";
+import { createChats } from "./chats.js";
 
 const world = createWorld();
 // Demo-only features (seeded content, the night, rules, finds, Stop) never run against the real backend.
@@ -155,6 +156,9 @@ const IQ = createIntel({
   record: (session, rec) => recordLine(session, rec),
 });
 
+const CH = createChats({ world, announce, heraldShow: (...a) => heraldShow(...a), go: (...a) => go(...a), schedule: () => schedule() });
+world.ui = { tbOpen: S.tbOpen }; // turn blocks open or folded, shared with the Chats view
+
 // ── world helpers ───────────────────────────────────────────────────────────
 const projects = () => world.state.projects.filter((p) => p.id !== "workspace");
 const threadsOf = (pid) => world.state.threads.filter((t) => t.project === pid && t.state !== "resolved");
@@ -256,7 +260,8 @@ function sideRender(needs) {
   $("#nv-home").setAttribute("aria-label", quiet ? "Home, sealed for the night" : n ? `Home, ${n} need you` : "Home, nothing needs you");
   $("#nv-home").classList.toggle("is-on", S.view === "home");
   $("#nv-ws").classList.toggle("is-on", S.view === "ws");
-  for (const b of [$("#nv-home"), $("#nv-ws")]) b.toggleAttribute("aria-current", b.classList.contains("is-on"));
+  $("#nv-chats").classList.toggle("is-on", CH.isChats(S.view));
+  for (const b of [$("#nv-home"), $("#nv-ws"), $("#nv-chats")]) b.toggleAttribute("aria-current", b.classList.contains("is-on"));
   const now = Date.now();
   const items = projects().map((p) => {
     const on = S.view === "p:" + p.id || convThread(S.view)?.project === p.id;
@@ -756,6 +761,7 @@ function nameOf(conv, who) {
 }
 
 function msgItems(conv, needs) {
+  if (CH.isChats(conv)) return CH.items(conv);
   const list = messagesOf(conv, needs);
   const items = [];
   let day = "", prev = null;
@@ -838,6 +844,16 @@ function topRender(needs) {
   top.dataset.kind = v === "ws" ? "ws" : t ? "thread" : "project";
   const back = $("#top-back");
   back.hidden = !t;
+  if (CH.isChats(v)) {
+    // Chats: the list, or one chat with its way back to the list
+    top.dataset.kind = v === "chats" ? "project" : "thread";
+    back.hidden = v === "chats";
+    if (v !== "chats") { back.innerHTML = `${ICON.back}<span>Chats</span>`; back.setAttribute("aria-label", "Back to Chats"); back.title = "Back (Esc)"; }
+    patch($("#top-who"), CH.headHtml(v));
+    patch($("#top-end"), "");
+    nowRender(needs); checklistRender(needs);
+    return;
+  }
   if (t) {
     const to = S.parent[v] || "p:" + t.project;
     const name = to === "home" ? "Home" : to === "ws" ? "Workspace" : PROJ(to.slice(2));
@@ -1072,6 +1088,8 @@ const tdock = $("#tdock");
 const TD = { key: null, busy: false };
 const keepBottom = () => { if (stuck && rendered && rendered !== "home") toBottom(false); };
 function dockRender(needs) {
+  if (CH.isChats(S.view)) { const h = CH.confirmHtml(); if (tdock._ch !== h) { tdock.innerHTML = h; tdock._ch = h; TD.key = null; } return; }
+  if (tdock._ch) { tdock._ch = ""; tdock.innerHTML = ""; }
   const t = convThread(S.view);
   const n = t && !D.isOpen() && !sealed() ? needs.find((x) => x.t.id === t.id && !x.later && (x.admitted || x.held)) : null;
   // Folded: the person chose to read the thread first. The ask waits as one slim line, and the
@@ -1156,6 +1174,9 @@ function typingRender() {
     const who = S.view === "ws" ? "The coordinator" : `${esc(PROJ(chat))} coordinator`;
     const doing = world.act.doing ? world.act.doing(chat) : null;
     html = `<div class="typing" role="status"><div class="av av-w">${XO}</div><div class="ty-b"><span class="shimmer">${who} is ${aw ? "replying" : "working"}${doing ? ` · ${esc(doing.replace(/`/g, ""))}` : ""}</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>${aw ? `<span class="elapsed" data-since="${aw.at}"></span>` : ""}</div></div>`;
+  } else if (!DEMO && S.view.startsWith("c:")) {
+    const sid = S.view.slice(2), tu = world.state.turns && world.state.turns.running(sid);
+    if (CH.busy(S.view) && !(tu && world.state.turns.blocksOf(tu).length)) html = `<div class="typing" role="status"><div class="av av-t av-w">${ICON.thread}</div><div class="ty-b"><span class="shimmer">Working</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>`;
   } else if (!DEMO && t && t.sessionId && world.state.turns && world.state.turns.running(t.sessionId) && world.state.turns.blocksOf(world.state.turns.running(t.sessionId)).length) {
     html = ""; // its running turn shows the work itself
   } else if (S.typing[S.view]) {
@@ -1235,6 +1256,9 @@ function undoRecord(id) {
 }
 function chipRender(fade = false) {
   const chip = $("#iq");
+  // a chat's agent, model and mode are set in the line above the composer, not by the router
+  chip.hidden = CH.isChats(S.view);
+  if (chip.hidden) return;
   const s = sessionOf(S.view);
   const html = IQ.chipHtml(s, PHONE.matches);
   chip.title = IQ.chipTitle(s);
@@ -1269,6 +1293,8 @@ function running() {
     if (S.stopping && S.stopping.until > Date.now()) return null; // a Stop is waiting out its Undo
     const t = convThread(S.view);
     if (t) return t.busy && t.sessionId ? { kind: "thread", t, session: t.sessionId } : null;
+    if (S.view.startsWith("c:")) return CH.busy(S.view) ? { kind: "chat", session: S.view.slice(2) } : null;
+    if (S.view === "chats") return null;
     const chat = chatOf(S.view);
     const sid = chat && world.act.coordinatorBusy ? world.act.coordinatorBusy(chat) : null;
     return sid ? { kind: "coord", conv: S.view, session: sid } : null;
@@ -1293,6 +1319,14 @@ function sendRender() {
   btn.title = run ? (run.kind === "coord" ? "Stop the coordinator" : "Stop the agent (it keeps what's done)") : "Send (Enter)";
 }
 function updateComposer() {
+  if (CH.isChats(S.view)) {
+    const html = liveBlock() ? `<span class="tg-warn">${ICON.pause}</span><span>Sending is paused · ${esc(liveBlock())}</span>` : CH.targetHtml(S.view);
+    if ($("#target")._h !== html) { $("#target").innerHTML = html; $("#target")._h = html; }
+    syncPlaceholder();
+    $("#composer").classList.toggle("has-text", !!say.value);
+    sendRender(); growSay(); atList.hidden = true;
+    return;
+  }
   const tg = DEMO ? null : targetOf(say.value, world.state.projects);
   const pid = DEMO ? parseTarget(say.value) : tg.pid;
   const t = convThread(S.view);
@@ -1327,6 +1361,7 @@ function updateComposer() {
 }
 /** The composer's placeholder follows the view, and a resolved thread says a reply reopens it. */
 function syncPlaceholder() {
+  if (CH.isChats(S.view)) { const ph = CH.placeholder(S.view); if (say.placeholder !== ph) { say.placeholder = ph; $("#say-label").textContent = ph; } return; }
   const t = convThread(S.view);
   const ph = t ? (t.state === "resolved" ? "Reply to reopen it…" : "Reply to the agent…") : S.view === "home" ? (PHONE.matches ? "What should get done?" : "What should get done? Use @project to aim it") : S.view === "ws" ? "Ask anything across your projects…" : `Message ${PROJ(convProject(S.view))}…`;
   if (say.placeholder !== ph) { say.placeholder = ph; $("#say-label").textContent = ph; }
@@ -1363,6 +1398,8 @@ say.addEventListener("keydown", (e) => {
 atList.addEventListener("mousedown", (e) => { const li = e.target.closest("li"); if (li) { e.preventDefault(); pickAt(li.dataset.pid); } });
 $("#composer").addEventListener("submit", (e) => { e.preventDefault(); if ($("#send").dataset.mode === "stop") stopRun(); else send(); });
 $("#target").addEventListener("click", () => {
+  if (S.view === "chats") { CH.openSetup($("#target")); return; }
+  if (S.view.startsWith("c:")) { if (CH.busy(S.view)) { CH.toggleNow(S.view); updateComposer(); } say.focus(); return; }
   if (!/(^|\s)@/.test(say.value)) say.value = "@" + (say.value ? " " + say.value : "");
   say.focus(); say.setSelectionRange(1, 1); updateComposer();
 });
@@ -1374,7 +1411,7 @@ $("#iq").addEventListener("click", () => { if (IQ.isOpen) IQ.close(); else IQ.op
  */
 function stopLive(run) {
   const until = Date.now() + Kit.COMMIT_MS;
-  const what = run.kind === "thread" ? run.t.title : run.conv === "ws" ? "The coordinator" : `${PROJ(chatOf(run.conv))} coordinator`;
+  const what = run.kind === "thread" ? run.t.title : run.kind === "chat" ? "This chat" : run.conv === "ws" ? "The coordinator" : `${PROJ(chatOf(run.conv))} coordinator`;
   const token = { session: run.session, until, cancelled: false };
   S.stopping = token;
   heraldShow({ kind: "halt", text: "Stopping", sub: what, undo: () => { token.cancelled = true; S.stopping = null; announce("Not stopped. It keeps working."); schedule(); } }, Kit.COMMIT_MS);
@@ -1433,7 +1470,8 @@ function lift(el, from) {
 
 /** Live: why sending is paused right now, or "" (classic composerBlock, in plain words). */
 function liveBlock() {
-  if (DEMO) return "";
+  if (DEMO) return CH.isChats(S.view) ? "Chats run in Live" : "";
+  if (CH.isChats(S.view)) return sendBlock(world.state, { timeline: false });
   const t = convThread(S.view);
   const toThread = !!t && !/(^|\s)@[\w.-]+/.test(say.value);
   return sendBlock(world.state, { timeline: !toThread });
@@ -1482,6 +1520,14 @@ async function deliverLive(m, thread) {
 
 function send() {
   const raw = say.value;
+  if (CH.isChats(S.view)) {
+    const text = raw.trim();
+    if (!text || liveBlock()) return;
+    say.value = ""; saveDraft(); updateComposer();
+    sound.play("send");
+    CH.send(S.view, text);
+    return;
+  }
   if (!DEMO) { sendLive(raw); return; }
   const pid = parseTarget(raw);
   const text = raw.replace(/(^|\s)@[\w.-]+\s?/, "$1").trim();
@@ -1572,7 +1618,7 @@ function render() {
   pings(needs);
   const v = S.view;
   const isHome = v === "home";
-  $("#app").dataset.view = isHome ? "home" : v === "ws" ? "ws" : v.startsWith("t:") ? "thread" : "project";
+  $("#app").dataset.view = isHome ? "home" : v === "ws" ? "ws" : v.startsWith("t:") || v.startsWith("c:") ? "thread" : "project";
   document.body.classList.toggle("sealed", sealed());
   $("#home").hidden = !isHome;
   $("#conv").hidden = isHome;
@@ -1683,6 +1729,7 @@ function liveReady(v) {
 function follow() {
   if (DEMO) return;
   const v = S.view, t = convThread(v);
+  if (CH.isChats(v)) { world.act.watch([]); world.act.watchThread(null); CH.open(v); return; }
   world.act.watch(v === "home" || v === "ws" ? ["workspace"] : v.startsWith("p:") ? [v.slice(2)] : t ? [t.project] : []);
   world.act.watchThread(t ? t.id : null);
 }
@@ -1698,6 +1745,7 @@ function ensureRoot() {
 }
 function back() {
   const v = S.view;
+  if (v.startsWith("c:")) { go("chats", { from: "t:" }); return; }
   if (v.startsWith("t:")) go(S.parent[v] || "p:" + convThread(v)?.project, { from: v });
 }
 $("#top-back").addEventListener("click", back);
@@ -1807,6 +1855,11 @@ document.addEventListener("click", (e) => {
   const ru = t.closest("[data-rec-undo]");
   if (ru) { undoRecord(ru.dataset.recUndo); return; }
   if (t.closest("[data-herald-undo]")) { const u = S.herald?.undo; if (typeof u === "function") { S.herald.until = 0; schedule(); u(); } else if (u) undoRecord(u); return; }
+  // Chats: "send now" would stop background tasks; a failed prompt
+  const chc = t.closest("[data-chc]");
+  if (chc) { CH.resolveConfirm(chc.dataset.chc); return; }
+  const chr = t.closest("[data-chat-retry]");
+  if (chr) { CH.retry(chr.dataset.chatRetry); return; }
   // sub-agents: the strip under the checklist, the log, a sub-agent's row in a turn
   const rc = t.closest("[data-run-call]");
   if (rc) { const th = convThread(S.view); const r = [...(world.state.runs?.values() || [])].find((x) => x.spawn === rc.dataset.runCall); openRuns(th, r ? r.id : null); return; }
@@ -2023,7 +2076,7 @@ const jump = $("#jump"), jq = $("#jump-q"), jl = $("#jump-list");
 let jsel = 0, jitems = [];
 function jumpRender() {
   const q = jq.value.trim().toLowerCase();
-  const all = [{ v: "home", name: "Home", sub: "Your next move", icon: ICON.home }, { v: "ws", name: "Workspace", sub: "The coordinator", icon: XO }];
+  const all = [{ v: "home", name: "Home", sub: "Your next move", icon: ICON.home }, { v: "ws", name: "Workspace", sub: "The coordinator", icon: XO }, { v: "chats", name: "Chats", sub: "One agent, one folder", icon: ICON.thread }];
   for (const p of projects()) {
     all.push({ v: "p:" + p.id, name: p.name, sub: "Project", icon: ICON.project });
     for (const t of threadsOf(p.id)) all.push({ v: "t:" + t.id, name: t.title, sub: `${p.name} · ${wordOf(t).toLowerCase()}`, icon: `<i class="g g-${glyphOf(t)}"></i>`, t: true });
@@ -2188,6 +2241,19 @@ $("#sc-ic").innerHTML = ICON.plus;
 $("#dlg-ic").innerHTML = ICON.project;
 $("#ic-home").innerHTML = ICON.home;
 $("#ic-ws").innerHTML = XO;
+$("#ic-chats").innerHTML = ICON.thread;
+// a new chat's setup: folder, agent, model, effort, what it may do (all from the runtime's feature list)
+{
+  const cs = $("#cs-pop");
+  cs.addEventListener("change", (e) => { const f = e.target.closest("[data-cs]"); if (f) { CH.setPref(f.dataset.cs, f.value); CH.renderSetup(); updateComposer(); } });
+  cs.addEventListener("click", (e) => {
+    const m = e.target.closest("[data-csmode]");
+    if (m) { CH.setPref("mode", m.dataset.csmode); CH.renderSetup(); updateComposer(); return; }
+    if (e.target.closest("[data-cs-done]")) { CH.closeSetup(); updateComposer(); }
+  });
+  cs.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); CH.closeSetup(); } });
+  document.addEventListener("pointerdown", (e) => { if (CH.setupOpen && !cs.contains(e.target) && !e.target.closest("#target")) CH.closeSetup(); });
+}
 $("#pb-menu").innerHTML = ICON.menu;
 $("#side-x").innerHTML = ICON.close;
 $("#pn-x").innerHTML = ICON.close;

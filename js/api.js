@@ -140,7 +140,9 @@ export const api = {
   /** Stored frames, for history and resumes beyond the stream's reach. */
   events: (query = {}) => get("/chat/events", query),
 
-  // ── plain chat and control (U2) ───────────────────────────────────────────
+  // ── plain chat and control ────────────────────────────────────────────────
+  /** A plain chat's history lives in its CLI transcript, read by observation (UI-reference §2.1). */
+  observedMessages: (nativeId, query = {}) => get(`/messages/${enc(nativeId)}`, query),
   prompt: (body) => send("POST", "/chat/prompt", body),
   abort: (sessionId) => send("POST", "/chat/abort", { session_id: sessionId }),
 

@@ -24,6 +24,7 @@
       <nav class="nav" aria-label="Main">
         <button type="button" class="nrow" data-go="home" id="nv-home"><span class="nr-ic" id="ic-home"></span><span class="nr-name">Home</span><span class="nr-n" id="home-n"></span></button>
         <button type="button" class="nrow" data-go="ws" id="nv-ws"><span class="nr-ic nr-xo" id="ic-ws"></span><span class="nr-name">Workspace</span></button>
+        <button type="button" class="nrow" data-go="chats" id="nv-chats"><span class="nr-ic" id="ic-chats"></span><span class="nr-name">Chats</span></button>
       </nav>
       <div class="side-label"><span id="projects-label">Projects</span></div>
       <nav class="projects" id="projects" aria-labelledby="projects-label"></nav>
@@ -162,6 +163,9 @@
   <div class="sheet" id="runs" role="dialog" aria-modal="true" aria-labelledby="runs-h" hidden>
     <div class="sheet-card runs-card" id="runs-card" tabindex="-1"></div>
   </div>
+
+  <!-- A new chat's setup: folder, agent, model, effort, what it may do -->
+  <div class="iq-pop cs-pop" id="cs-pop" role="dialog" aria-label="New chat" tabindex="-1" hidden></div>
 
   <!-- Intelligence for this conversation: an anchored popover (a bottom sheet on a phone) -->
   <div class="iq-pop" id="iq-pop" role="dialog" aria-labelledby="iq-hh" tabindex="-1" hidden></div>

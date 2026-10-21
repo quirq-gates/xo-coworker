@@ -1690,3 +1690,23 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .iq-row.lv .iq-n{flex:none}
 .iq-row.lv .iq-tr{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .iq-pip.is-flat{width:auto;padding:0 8px;font-size:var(--fs-xs);color:var(--ink-3)}
+
+/* ── Chats: plain chats with one agent (U1) ───────────────────────────────── */
+.ch-list{list-style:none;display:flex;flex-direction:column;gap:6px;margin:6px 0 24px}
+.ch-row{display:flex;align-items:center;gap:12px;width:100%;min-height:58px;padding:10px 14px;border-radius:14px;background:var(--surface);border:1px solid var(--hair);text-align:left;transition:border-color var(--dur-fast),background var(--dur-fast)}
+.ch-row:hover{border-color:var(--line-hover)}
+.ch-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.ch-t{font:550 var(--fs-md)/1.35 var(--sans);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch-m{font-size:var(--fs-sm);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch-a{flex:none;font-size:var(--fs-sm);color:var(--ink-4);font-variant-numeric:tabular-nums}
+.ch-calm{margin-top:12px}
+.tg-ch{margin-left:6px;color:var(--ink-2);text-decoration:underline;text-decoration-color:var(--g45);text-underline-offset:2px}
+.cs-pop{max-height:min(640px,80vh);overflow-y:auto}
+.cs-f{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;font-size:var(--fs-sm);color:var(--ink-3)}
+.cs-f select{flex:0 1 230px;min-width:0;height:34px;padding:0 8px;border-radius:9px;border:1px solid var(--pop-line);background:var(--pop-bg);color:var(--ink);font:500 var(--fs-base)/1 var(--sans)}
+.cs-modes{display:flex;flex-direction:column;gap:6px}
+.cs-modes .set-choice{padding:10px 12px;border-radius:12px}
+.ch-confirm{width:min(720px,100%);margin:0 auto 10px;display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-radius:16px;background:color-mix(in srgb,var(--warn) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--warn) 30%,var(--hair));font-size:var(--fs-base);color:var(--ink-2)}
+.ch-confirm b{color:var(--ink)}
+.target>span:not(.tg-t):not(.tg-warn):not(.tg-ch){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.target .tg-ch{flex:none}

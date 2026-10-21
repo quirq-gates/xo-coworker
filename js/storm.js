@@ -416,6 +416,8 @@ export function stormSource(state, emit, event) {
         if (d.reason === "resumed") next.paused = null;
         if (d.reason === "updated") Object.assign(next, { model: d.model ?? old.model, effort: d.effort ?? old.effort });
         if (d.reason === "retired") next.retired_at = env.ts || new Date().toISOString();
+        // PR 24: an unconfirmed "send now" was added to the running turn instead
+        if (d.reason === "now_became_add") event({ kind: "now_became_add", session: id, wakes: d.wakes || [], runs: d.runs || 0 });
         state.sessions[id] = next;
         // a turn for our message ended: "replying" ends with it; a failure is said plainly (#30)
         if (COORD.has(next.role) && !BUSY.has(next.state)) settleAwaiting(next.chat_id);
@@ -709,6 +711,8 @@ export function stormSource(state, emit, event) {
         const s = Object.values(state.sessions).find((x) => x.chat_id === chat && COORD.has(x.role) && !x.retired_at && BUSY.has(x.state));
         return s ? s.id : null;
       },
+      /** A session's recent turns, read from its stored frames (a plain chat's work, a thread's). */
+      loadTurns: async (sid) => { await loadTurns(sid); emitSoon(); },
       status: loadStatus,
       chatIdOf,
       projectOf,
