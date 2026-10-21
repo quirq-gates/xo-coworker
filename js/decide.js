@@ -15,6 +15,7 @@
 // no key takes it. Focus lands on the card itself, never on an answer.
 import { esc, WAITING } from "./world.js";
 import * as Kit from "./kit.js";
+import * as K from "./keys.js";
 import { EFFORT, effortOf, rank, evidenceFor, leverageOf, suggestFor, whyLine, estLine } from "./content.js";
 import { ICON, $, RM, clock, sound, dial, wait, morph, expand } from "./ui.js";
 
@@ -327,18 +328,18 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (opts) act += `<div class="c-opts n${Math.min(opts.length, 3)}" role="group" aria-label="Answers">${opts.map((o, i) => optHtml(o, i, ev)).join("")}</div>`;
     let primary;
     if (destructive) primary = `<button type="button" class="b b-hold" data-act="hold" title="Press and hold for 1.2 s (hold Enter)" aria-label="Hold to allow: ${esc(a.title)}. Press and hold for 1.2 seconds."><span class="hold-fill" aria-hidden="true"></span><span class="b-l"><span class="hold-ic">${ICON.lock}</span><span class="hold-txt">Hold to allow</span></span></button>`;
-    else if (stopped) primary = `<button type="button" class="b b-allow" data-act="retry" title="Try again (A)"><span class="b-l">${ICON.retry}Try again</span></button>`;
-    else if (binary) primary = `<button type="button" class="b b-allow${r === "notable" ? " arming" : ""}" data-act="allow" title="Allow (A)" aria-keyshortcuts="A"><span class="b-l">${ICON.check}<span class="al-t">${scope ? "Allow + rule" : "Allow"}</span></span></button>`;
-    else primary = `<button type="button" class="b b-reply" data-act="reply" title="Reply in your words (R)"><span class="b-l">${ICON.edit}Reply in words</span></button>`;
+    else if (stopped) primary = `<button type="button" class="b b-allow" data-act="retry" title="Try again${K.hint("allow")}"><span class="b-l">${ICON.retry}Try again</span></button>`;
+    else if (binary) primary = `<button type="button" class="b b-allow${r === "notable" ? " arming" : ""}" data-act="allow" title="Allow${K.hint("allow")}" aria-keyshortcuts="${K.label("allow")}"><span class="b-l">${ICON.check}<span class="al-t">${scope ? "Allow + rule" : "Allow"}</span></span></button>`;
+    else primary = `<button type="button" class="b b-reply" data-act="reply" title="Reply in your words${K.hint("reply")}"><span class="b-l">${ICON.edit}Reply in words</span></button>`;
     const secondary = stopped
-      ? `<button type="button" class="b b-back" data-act="note-reply" title="Tell it what to try (R)"><span class="b-l">${ICON.edit}Tell it what to try</span></button>`
-      : `<button type="button" class="b b-back" data-act="back" title="Send back with a note (D)" aria-keyshortcuts="D"><span class="b-l">${ICON.rewind}Send back</span></button>`;
+      ? `<button type="button" class="b b-back" data-act="note-reply" title="Tell it what to try${K.hint("reply")}"><span class="b-l">${ICON.edit}Tell it what to try</span></button>`
+      : `<button type="button" class="b b-back" data-act="back" title="Send back with a note${K.hint("back")}" aria-keyshortcuts="${K.label("back")}"><span class="b-l">${ICON.rewind}Send back</span></button>`;
     // Live questions are answered in words: no "Send back" that would post a non-answer (P1-6).
     act += a.stopByYou || a.replyOnly ? `<div class="c-btns one">${primary}</div>` : `<div class="c-btns">${primary}${secondary}</div>`;
     const low = [];
-    if (teachable) low.push(`<button type="button" class="teach-tog" data-act="teach" aria-pressed="${!!scope}" title="Make it a rule (T)"><span class="sw" aria-hidden="true"></span>${reps >= 2 ? `<span class="rep">${ord(reps + 1)} time this week</span> · ` : ""}Make it a rule</button>`);
-    if (destructive) low.push(`<button type="button" class="b-later" data-act="later" title="Plan for later today (L)">${ICON.clock}Later today</button><span class="c-low-t">or skip to the easier ones</span>`);
-    else if (n.effort === "think") low.push(`<button type="button" class="b-later" data-act="later" title="Plan for later today (L)">${ICON.clock}Later today</button>`);
+    if (teachable) low.push(`<button type="button" class="teach-tog" data-act="teach" aria-pressed="${!!scope}" title="Make it a rule${K.hint("rule")}"><span class="sw" aria-hidden="true"></span>${reps >= 2 ? `<span class="rep">${ord(reps + 1)} time this week</span> · ` : ""}Make it a rule</button>`);
+    if (destructive) low.push(`<button type="button" class="b-later" data-act="later" title="Plan for later today${K.hint("later")}">${ICON.clock}Later today</button><span class="c-low-t">or skip to the easier ones</span>`);
+    else if (n.effort === "think") low.push(`<button type="button" class="b-later" data-act="later" title="Plan for later today${K.hint("later")}">${ICON.clock}Later today</button>`);
     if (low.length) act += `<div class="c-low">${low.join("")}</div>`;
     if (teachable) act += `<div class="teach-body"${scope ? "" : " hidden"}><div class="teach-in"><div class="teach-scope" role="radiogroup" aria-label="Rule scope"><button type="button" role="radio" data-scope="exact" aria-checked="${scope !== "prefix"}">Exactly this command</button><button type="button" role="radio" data-scope="prefix" aria-checked="${scope === "prefix"}">Any “${esc(Kit.prefixOf(cmd))}”</button></div><p class="teach-q"><span>Added to your rules, word for word:</span><q>${esc(Kit.teachSentence(PROJ(t.project), scope === "prefix" ? Kit.prefixOf(cmd) : cmd))}</q></p></div></div>`;
     act += `<div class="c-note" hidden><label for="c-note-${id}" class="c-note-l"></label><textarea id="c-note-${id}" class="c-note-in" rows="2"></textarea>` +
@@ -349,16 +350,15 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     const estT = estLine(n);
     const est = !destructive && !a.stopByYou && estT ? `<p class="c-est" title="${t.live ? "From its checklist: the steps not done yet." : "An estimate: the steps left that wait on this answer × a typical step time."}">${ICON.hourglass}<span>${esc(estT)}</span></p>` : "";
     const sug = n.sug ? `<p class="c-sug" title="${esc(n.sug.why)}">${ICON.spark}<span>Suggests <b>${esc(n.sug.label)}</b></span><em>${esc(n.sug.sure)}</em></p>` : "";
-    const disSub = `${ev.change ? esc(ev.change.label) + " · " : ""}why · checklist`;
 
     return `<div class="card-in" data-key="${esc(n.key)}">` +
       `<div class="c-body">` +
       `<div class="c-top"><span class="eff e-${n.effort}">${dial(n.effort)}<b>${E.label}</b><span>${E.time}</span></span>` +
       (destructive ? `<span class="risk r-destructive">${ICON.lock}Destructive</span>` : stopped ? `<span class="risk r-stopped">Stopped</span>` : "") +
-      `<button type="button" class="c-where" data-act="thread" title="${surface === "dock" ? "Open the thread" : "Open the thread beside this (O)"}">${esc(PROJ(t.project))}<span aria-hidden="true">›</span><b>${esc(t.title)}</b></button></div>` +
+      `<button type="button" class="c-where" data-act="thread" title="${surface === "dock" ? "Open the thread" : `Open the thread beside this${K.hint("open")}`}">${esc(PROJ(t.project))}<span aria-hidden="true">›</span><b>${esc(t.title)}</b></button></div>` +
       `<h3 class="c-h" id="card-h-${id}">${headline(n)}</h3>` +
       (line ? `<p class="c-line" id="card-why-${id}">${esc(line)}</p>` : "") + facts + est + sug +
-      `<div class="dis${openEv ? " is-open" : ""}" data-dis="ev"><button type="button" class="dis-h" aria-expanded="${openEv}" aria-controls="dt-${id}" title="Details (E)">${ICON.chevron}<span>Details</span><small>${disSub}</small></button>` +
+      `<div class="dis${openEv ? " is-open" : ""}" data-dis="ev"><button type="button" class="dis-h" aria-expanded="${openEv}" aria-controls="dt-${id}" title="Details${K.hint("details")}">${ICON.chevron}<span>Details</span></button>` +
       `<div class="dis-b" id="dt-${id}"${openEv ? "" : " hidden"}><div class="dis-in">${detailsHtml(n, ev)}</div></div></div>` +
       `</div>` +
       `<div class="c-act">${act}<p class="c-hint" aria-live="polite"></p></div></div>`;
@@ -616,9 +616,9 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     const routine = F.order.filter(pending).map((k) => F.items.get(k)).filter((n) => n && n.group === "routine" && Kit.isBinary(n.ask));
     const foot = $("#pn-foot");
     foot.innerHTML = F.done || F.vig ? "" :
-      `<button type="button" class="pn-nav" data-nav="-1" title="Previous (K)" aria-label="Previous ask"${total < 2 ? " disabled" : ""}>${ICON.back}</button>` +
+      `<button type="button" class="pn-nav" data-nav="-1" title="Previous${K.hint("prev")}" aria-label="Previous ask"${total < 2 ? " disabled" : ""}>${ICON.back}</button>` +
       (routine.length >= 2 ? `<button type="button" class="pn-all" data-all>Allow all ${routine.length} routine</button>` : `<span class="pn-tip">Skip freely; nothing here is forced first.</span>`) +
-      `<button type="button" class="pn-nav" data-nav="1" title="Skip ahead (J)" aria-label="Skip to the next ask"${total < 2 ? " disabled" : ""}>${ICON.right}</button>`;
+      `<button type="button" class="pn-nav" data-nav="1" title="Skip ahead${K.hint("next")}" aria-label="Skip to the next ask"${total < 2 ? " disabled" : ""}>${ICON.right}</button>`;
     render();
   }
 
@@ -672,7 +672,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     toast.className = `toast t-${deny ? "back" : "allow"}`;
     toast.hidden = false;
     toast.innerHTML = `<span class="t-ic">${deny ? ICON.rewind : ICON.check}</span><span class="t-m"><b>${esc(it.meta.verb)}</b> <span>${esc(it.meta.label)}</span></span>` +
-      `<button type="button" class="t-undo" title="Undo (U)" aria-keyshortcuts="U"><svg class="t-ring" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8" style="animation-duration:${left}ms"/></svg>Undo</button>`;
+      `<button type="button" class="t-undo" title="Undo"><svg class="t-ring" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8" style="animation-duration:${left}ms"/></svg>Undo</button>`;
     toast.querySelector(".t-undo").addEventListener("click", () => queue.undo(it.id));
   }
 
@@ -690,13 +690,13 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (!n) return false;
     const k = e.key;
     const own = () => { e.preventDefault(); e.stopPropagation(); };
-    if (k === "a") { own(); card._allow(); }
-    else if (k === "d" || k === "D") { own(); if (n.group === "stopped" || n.ask.replyOnly) card._openNote("reply"); else card._openNote("back"); }
-    else if (k === "r" || k === "R") { if (!Kit.isBinary(n.ask)) { own(); card._openNote("reply"); } }
-    else if (k === "e" || k === "E") { own(); card._dis("ev"); }
-    else if (k === "t" || k === "T") { own(); card._teach(); }
-    else if (k === "u" || k === "U") { own(); undo(); }
-    else if (inPanel && (k === "o" || k === "O")) { own(); onOpenThread && onOpenThread(n.t.id, "panel"); }
+    if (K.is(e, "allow")) { own(); card._allow(); }
+    else if (K.is(e, "back")) { own(); if (n.group === "stopped" || n.ask.replyOnly) card._openNote("reply"); else card._openNote("back"); }
+    else if (K.is(e, "reply")) { if (!Kit.isBinary(n.ask)) { own(); card._openNote("reply"); } }
+    else if (K.is(e, "details")) { own(); card._dis("ev"); }
+    else if (K.is(e, "rule")) { own(); card._teach(); }
+    else if (K.is(e, "undo")) { own(); undo(); }
+    else if (inPanel && K.is(e, "open")) { own(); onOpenThread && onOpenThread(n.t.id, "panel"); }
     else if (/^[1-9]$/.test(k) && Array.isArray(n.ask.options) && !Kit.isBinary(n.ask)) {
       const o = n.ask.options[+k - 1];
       if (o != null) { own(); card.querySelector(`[data-opt="${+k - 1}"]`)?.click(); }
@@ -720,10 +720,10 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (!card || !n) return;
     const k = e.key;
     const own = () => { e.preventDefault(); e.stopPropagation(); };
-    if (k === "A" && e.shiftKey) { own(); confirmAll(); return; }
-    if ((k === "l" || k === "L") && n.effort === "think") { own(); setLater(); return; }
-    if (k === "j" || k === "ArrowRight") { own(); skip(1); return; }
-    if (k === "k" || k === "ArrowLeft") { own(); skip(-1); return; }
+    if (K.is(e, "allowAll")) { own(); confirmAll(); return; }
+    if (K.is(e, "later") && n.effort === "think") { own(); setLater(); return; }
+    if (K.is(e, "next") || k === "ArrowRight") { own(); skip(1); return; }
+    if (K.is(e, "prev") || k === "ArrowLeft") { own(); skip(-1); return; }
     cardKeys(e, card, { inPanel: true });
   });
 

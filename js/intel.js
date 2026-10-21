@@ -23,6 +23,7 @@
 // Demo mode simulates the router's picks and the pin store client-side (no
 // writes). Live mode would call GET|PUT|DELETE
 // /api/projects-chat/chats/{chat}/intelligence (and per thread): R6.
+import * as K from "./keys.js";
 import { esc } from "./world.js";
 import { ICON, RM } from "./ui.js";
 import { coderHeaders } from "./api.js";
@@ -107,8 +108,8 @@ export function createIntel({ world, PROJ, params, onChange, record }) {
   }
   function liveTitle(session) {
     const i = liveInfo(session);
-    if (!i.st) return "Intelligence: waiting for XO's status (M)";
-    return `${i.routedBy === "Router" ? "The agent backend picks the model for each message" : `${i.routedBy} routes each message`}${i.dm ? ` · decision model: ${i.dm}` : ""}. Click for details (M)`;
+    if (!i.st) return `Intelligence: waiting for XO's status${K.hint("intel")}`;
+    return `${i.routedBy === "Router" ? "The agent backend picks the model for each message" : `${i.routedBy} routes each message`}${i.dm ? ` · decision model: ${i.dm}` : ""}. Click for details${K.hint("intel")}`;
   }
   function livePop() {
     const s = P.session;
@@ -152,8 +153,8 @@ export function createIntel({ world, PROJ, params, onChange, record }) {
     if (LIVE) return liveTitle(session);
     const { c, m } = chipLabel(session);
     return c.pinned
-      ? `Pinned for ${scopeWord(session)}: ${m.name} · ${DEPTH[c.depth].name}. Click to change (M)`
-      : `${c.by || "Router"} chose ${m.name} · ${DEPTH[c.depth].name}: ${c.why}. Click to choose (M)`;
+      ? `Pinned for ${scopeWord(session)}: ${m.name} · ${DEPTH[c.depth].name}. Click to change${K.hint("intel")}`
+      : `${c.by || "Router"} chose ${m.name} · ${DEPTH[c.depth].name}: ${c.why}. Click to choose${K.hint("intel")}`;
   }
 
   // ── changes: one record line each, with a 3 s Undo ───────────────────────
@@ -164,7 +165,7 @@ export function createIntel({ world, PROJ, params, onChange, record }) {
     if (!INTEL_API) return { ok: false, why: "Pinning a model needs the backend's intelligence API (requirement R6)." };
     const [kind, id] = session === "ws" ? ["chat", "workspace"] : session.startsWith("p:") ? ["chat", session.slice(2)] : ["thread", session.slice(2)];
     const t = kind === "thread" ? world.thread(id) : null;
-    const url = kind === "chat" ? `/api/projects-chat/chats/${encodeURIComponent(id)}/intelligence` : `/api/projects-chat/chats/${encodeURIComponent(t?.project || "workspace")}/threads/${encodeURIComponent(id)}/intelligence`;
+    const url = kind === "chat" ? `api/projects-chat/chats/${encodeURIComponent(id)}/intelligence` : `api/projects-chat/chats/${encodeURIComponent(t?.project || "workspace")}/threads/${encodeURIComponent(id)}/intelligence`;
     try {
       const r = await fetch(url, value ? { method: "PUT", headers: { "content-type": "application/json", ...coderHeaders() }, body: JSON.stringify({ routing: value.routing, model: value.model, effort: DEPTH[value.depth].effort, pinned: true }) } : { method: "DELETE", headers: coderHeaders() });
       return r.ok ? { ok: true } : { ok: false, why: "The server can't pin this yet." };
@@ -265,7 +266,7 @@ export function createIntel({ world, PROJ, params, onChange, record }) {
     }).join("") || `<p class="iq-none">No model matches “${esc(P.q)}”.</p>`;
     pop.innerHTML =
       `<header class="iq-h"><h2 id="iq-hh">Intelligence <span>for ${esc(nameOf(s))}</span></h2>` +
-      `<button type="button" class="iq-auto" role="switch" aria-checked="${!c.pinned}" data-auto title="Back to Auto (A)">Auto<span class="sw" aria-hidden="true"></span></button></header>` +
+      `<button type="button" class="iq-auto" role="switch" aria-checked="${!c.pinned}" data-auto title="Back to Auto${K.hint("auto")}">Auto<span class="sw" aria-hidden="true"></span></button></header>` +
       now + routeHtml +
       `<div class="iq-sec"><div class="iq-lh"><span>Model</span><span>Depth</span></div><div class="iq-list" role="listbox" aria-label="Models" aria-activedescendant="iq-o${P.cur}">${list}</div>` +
       `<label class="iq-q">${ICON.search}<input id="iq-q" value="${esc(P.q)}" placeholder="${more ? `${more} more · type to filter` : "Type to filter"}" autocomplete="off" aria-label="Filter models"></label></div>` +
@@ -337,7 +338,7 @@ export function createIntel({ world, PROJ, params, onChange, record }) {
       P.depth = d; popRender(); return;
     }
     if (e.key === "Enter" && m) { own(); const d = m.depths.includes(P.depth) ? P.depth : m.depths.includes(2) ? 2 : m.depths[m.depths.length - 1]; pinAt(m.id, d); return; }
-    if (!inQ && (e.key === "a" || e.key === "A") && !e.metaKey && !e.ctrlKey) { own(); toAuto(); return; }
+    if (!inQ && K.is(e, "auto")) { own(); toAuto(); return; }
     if (!inQ && e.key.length === 1 && /\S/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) { const q = pop.querySelector("#iq-q"); q.focus(); }
   });
   document.addEventListener("pointerdown", (e) => { if (P.open && !pop.contains(e.target) && !e.target.closest("#iq")) close({ restore: false }); });

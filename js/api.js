@@ -1,6 +1,7 @@
 // Thin client for the projects-chat API (same origin; serve.py proxies /api).
+// Paths are relative to the page, so the UI also works under a path prefix.
 
-const BASE = "/api/projects-chat";
+const BASE = "api/projects-chat";
 
 // Inside a Coder workspace, the app is opened at `?coder_session_token=…`
 // (xo-swarm does this). Coder accepts that for the page load, but the cookie
@@ -95,11 +96,11 @@ export const api = {
   threads: (chat) => request(`/chats/${enc(chat)}/threads`),
   thread: (chat, ts) => request(`/chats/${enc(chat)}/threads/${enc(ts)}`),
   /** Where xo-projects live: {roots: {...}, default}. Never hard-code the root. */
-  workspaceConfig: () => request("/api/config/workspace", { base: "" }),
+  workspaceConfig: () => request("/config/workspace", { base: "api" }),
   /** Scaffold a new xo-project (xo-cowork-api). 409 when the folder exists. */
   createProject: ({ path, displayName, description }) =>
-    request("/api/files/mkdir", {
-      base: "",
+    request("/files/mkdir", {
+      base: "api",
       method: "POST",
       body: { path, scaffold: true, display_name: displayName, ...(description ? { description } : {}) },
     }),

@@ -14,6 +14,7 @@ import { createWorld, esc, WAITING } from "./world.js";
 import { mountMode } from "./mode.js";
 import { renderMarkdown } from "./markdown.js";
 import * as Kit from "./kit.js";
+import * as K from "./keys.js";
 import { createDecisions } from "./decide.js";
 import { createPacing } from "./pacing.js";
 import { createRules } from "./rules.js";
@@ -59,6 +60,8 @@ applyTheme(THEME.get());
 const S = {
   view: "home",            // home | ws | p:<project> | t:<thread>
   parent: {}, opener: {}, scroll: {},
+  dockFold: {},
+  recording: null, keyErr: null,  // Settings › Keyboard: the action waiting for a new key, and why the last one was refused            // asks folded away in their thread so you can read it first (by ask key)
   local: {}, alias: new Map(), localThread: new Map(),
   drafts: store.get(DRAFTS, {}),
   later: new Set(),
@@ -797,7 +800,7 @@ function topRender(needs) {
     back.setAttribute("aria-label", `Back to ${name}`);
     back.title = "Back (Esc)";
   }
-  let who;
+  let who, end = "";
   if (v === "ws") who = `<span class="tw-mini">${XO}</span><span class="tw-t"><b>Workspace</b></span>`;
   else if (v.startsWith("p:")) {
     const pid = v.slice(2);
@@ -806,17 +809,20 @@ function topRender(needs) {
     const w = ts.filter(isBusy).length;
     const dn = ts.filter((x) => x.state === "done").length;
     const parts = [nd && `<b class="is-amber">${nd} need${nd === 1 ? "s" : ""} you</b>`, w && `${w} working`, dn && `${dn} done this week`].filter(Boolean);
-    who = `<span class="tw-t"><h1 id="conv-title">${esc(PROJ(pid))}</h1><span class="pj-s">${parts.join(" · ") || (ts.length ? "All quiet" : "No threads yet")}${S.desc[pid] ? ` · ${esc(S.desc[pid])}` : ""}</span></span>` +
-      (ts.length ? `<button type="button" class="all-btn" data-all-threads aria-haspopup="dialog" title="All threads (T)">All threads<span>${ts.length}</span></button>` : "");
+    who = `<span class="tw-t"><h1 id="conv-title">${esc(PROJ(pid))}</h1><span class="pj-s">${parts.join(" · ") || (ts.length ? "All quiet" : "No threads yet")}${S.desc[pid] ? ` · ${esc(S.desc[pid])}` : ""}</span></span>`;
+    end = ts.length ? `<button type="button" class="all-btn" data-all-threads aria-haspopup="dialog" title="All threads">All threads<span>${ts.length}</span></button>` : "";
   } else if (t) {
     who = `<h1 class="tw-h" id="conv-title">${esc(t.title)}</h1><span class="badge st-${t.state}"><i class="g g-${glyphOf(t)}" aria-hidden="true"></i>${wordOf(t)}</span>`;
   } else who = `<span class="tw-t"><h1 id="conv-title">Thread</h1></span>`;
   patch($("#top-who"), who);
+  patch($("#top-end"), end);
   nowRender(needs);
   checklistRender(needs);
 }
 
-/** The Now shelf: at most three threads, needs-you first, then working. It never grows. */
+/** The Now strip, in the header row: every thread in progress as one slim chip (its state, its
+ *  name, its progress), needs-you first, then stopped, then working. One line high; it scrolls
+ *  sideways instead of growing. What each one is waiting on is said in the conversation below. */
 function nowRender(needs) {
   const wrap = $("#now-wrap");
   const v = S.view;
@@ -825,21 +831,37 @@ function nowRender(needs) {
   const ts = threadsOf(pid);
   const need = (t) => (sealed() ? null : needs.find((x) => x.t.id === t.id && x.admitted && !x.later));
   const rankT = (t) => (need(t) ? 0 : t.state === "failed" ? 1 : t.state === "working" ? 2 : 9);
-  const shelf = ts.filter((t) => rankT(t) < 9).sort((a, b) => rankT(a) - rankT(b) || b.lastAt - a.lastAt).slice(0, 3);
+  const shelf = ts.filter((t) => rankT(t) < 9).sort((a, b) => rankT(a) - rankT(b) || b.lastAt - a.lastAt);
   wrap.hidden = !shelf.length;
   if (!shelf.length) return;
   const items = shelf.map((t) => {
     const c = t.checklist, n = need(t);
-    const cur = c.items.find((i) => i.state === "doing") || c.items.find((i) => i.state === "todo");
     const st = n ? "needs" : glyphOf(t);
-    const line = n ? `<span class="nw-ask">${esc(askShort(n))}</span>` : t.state === "failed" ? `<span class="nw-stop">${esc(String(t.happened || "Stopped").replace(/^Stopped:\s*/i, ""))}</span>` : cur ? esc(cur.text) : "";
-    return `<button type="button" class="nw st-${st}" role="listitem" data-go="t:${esc(t.id)}" title="${esc(t.title)}" aria-label="${esc(t.title)}, ${n ? "needs you" : wordOf(t).toLowerCase()}, ${c.done} of ${c.total}">` +
-      `<span class="nw-top"><i class="g g-${n ? "needs_reply" : glyphOf(t)}" aria-hidden="true"></i><b>${esc(t.title)}</b><span class="nw-n">${c.done}/${c.total}</span></span>` +
-      `<span class="nw-segs" aria-hidden="true">${c.items.map((i) => `<i class="sg s-${i.state}"></i>`).join("")}</span>` +
-      `<span class="nw-l">${line}</span></button>`;
+    const what = n ? `needs you: ${askShort(n)}` : t.state === "failed" ? String(t.happened || "Stopped") : wordOf(t).toLowerCase();
+    return `<button type="button" class="nw st-${st}" role="listitem" data-go="t:${esc(t.id)}" title="${esc(`${t.title} · ${c.done} of ${c.total} · ${what}`)}" aria-label="${esc(t.title)}, ${n ? "needs you" : wordOf(t).toLowerCase()}, ${c.done} of ${c.total}">` +
+      `<i class="g g-${n ? "needs_reply" : glyphOf(t)}" aria-hidden="true"></i><b>${esc(t.title)}</b>` +
+      `<span class="nw-segs" aria-hidden="true">${c.items.map((i) => `<i class="sg s-${i.state}"></i>`).join("")}</span></button>`;
   }).join("");
   patch(wrap, `<div class="now" role="list" aria-label="Now in ${esc(PROJ(pid))}">${items}</div>`);
+  nowEdges();
 }
+/** Fade the strip's edges only where there is more to scroll to. */
+function nowEdges() {
+  const now = $("#now-wrap .now");
+  if (!now) return;
+  const more = now.scrollWidth - now.clientWidth > 2;
+  now.classList.toggle("fade-l", more && now.scrollLeft > 2);
+  now.classList.toggle("fade-r", more && now.scrollLeft < now.scrollWidth - now.clientWidth - 2);
+}
+$("#now-wrap").addEventListener("scroll", nowEdges, { passive: true, capture: true });
+$("#now-wrap").addEventListener("wheel", (e) => {
+  // a mouse wheel scrolls the strip sideways
+  const now = e.target.closest(".now");
+  if (!now || Math.abs(e.deltaX) > Math.abs(e.deltaY) || now.scrollWidth <= now.clientWidth) return;
+  e.preventDefault();
+  now.scrollLeft += e.deltaY;
+}, { passive: false });
+addEventListener("resize", () => nowEdges());
 
 /** The checklist bar: shows the step in progress; a finished step flashes its tick, then moves on. */
 function checklistRender(needs) {
@@ -869,7 +891,7 @@ function checklistRender(needs) {
   const segs = c.items.map((i, k) => `<i class="sg s-${i.state}${fresh && k === c.done - 1 ? " is-pop" : ""}"></i>`).join("");
   const list = c.items.map((i) => `<li class="ck ck-${i.state}"><span class="ck-m" aria-hidden="true">${i.state === "done" ? "✓" : i.state === "doing" ? "✱" : "○"}</span><span>${esc(i.text)}</span><span class="sr-only">, ${i.state === "doing" ? "in progress" : i.state}</span></li>`).join("");
   const html = `<div class="ckbar m-${mode}${open ? " is-open" : ""}">` +
-    `<div class="ck-row"><button type="button" class="ck-tog" data-ck aria-expanded="${open}" aria-controls="ck-list" title="Checklist (C)">` +
+    `<div class="ck-row"><button type="button" class="ck-tog" data-ck aria-expanded="${open}" aria-controls="ck-list" title="Checklist">` +
     `<span class="ck-segs" aria-hidden="true">${segs}</span><span class="ck-n">${c.done} of ${c.total}</span>` +
     `<span class="ck-now" data-mode="${mode}">${nowHtml}</span>${t.branch ? `<code class="ck-br">${ICON.branch}${esc(t.branch)}</code>` : ""}<span class="ck-chev">${ICON.chevron}</span></button></div>` +
     `<div class="ck-b"><ol class="ck-list" id="ck-list" aria-label="Checklist">${list}</ol></div></div>`;
@@ -883,13 +905,28 @@ const keepBottom = () => { if (stuck && rendered && rendered !== "home") toBotto
 function dockRender(needs) {
   const t = convThread(S.view);
   const n = t && !D.isOpen() && !sealed() ? needs.find((x) => x.t.id === t.id && !x.later && (x.admitted || x.held)) : null;
-  const key = n ? n.key : null;
+  // Folded: the person chose to read the thread first. The ask waits as one slim line, and the
+  // conversation isn't dimmed. A new ask on this thread docks open again.
+  const folded = !!(n && S.dockFold[n.key]);
+  const key = n ? n.key + (folded ? "|fold" : "") : null;
   if (TD.busy || key === TD.key) return;
   const prev = TD.key;
   TD.key = key;
   if (!n) {
     if (!prev) { tdock.innerHTML = ""; return; }
     morph(tdock, () => { tdock.innerHTML = ""; }, { duration: 300 });
+    return;
+  }
+  const head = (() => { const tp = document.createElement("template"); tp.innerHTML = D.cardHtml(n, "dock").trim(); return tp.content.querySelector(".c-h")?.textContent.trim() || askShort(n); })();
+  if (folded) {
+    const E = EFFORT[n.effort];
+    const bar = document.createElement("button");
+    bar.type = "button";
+    bar.className = `dock-fold r-${n.risk}`;
+    bar.dataset.unfold = n.key;
+    bar.title = "Open the decision";
+    bar.innerHTML = `<i class="g g-${n.group === "stopped" ? "failed" : "needs_reply"}" aria-hidden="true"></i><span class="df-t">${esc(head)}</span><span class="df-e">${esc(E.label)} ${esc(E.time)}</span><span class="df-go">Open ${ICON.chevron}</span>`;
+    morph(tdock, () => { tdock.innerHTML = ""; tdock.appendChild(bar); }, { duration: 300 });
     return;
   }
   const frame = document.createElement("article");
@@ -902,6 +939,7 @@ function dockRender(needs) {
   const inner = tpl.content.firstElementChild;
   frame.appendChild(inner);
   frame.setAttribute("aria-labelledby", inner.querySelector(".c-h").id);
+  frame.insertAdjacentHTML("beforeend", `<button type="button" class="dock-hide" data-fold="${esc(n.key)}" title="Fold it away and read the thread first">${ICON.chevron}<span>Read the thread first</span></button>`);
   morph(tdock, () => { tdock.innerHTML = ""; tdock.appendChild(frame); }, { duration: prev ? 300 : 360, fade: frame });
   D.wireCard(frame, inner, n, {
     surface: "dock",
@@ -913,7 +951,7 @@ function dockRender(needs) {
         // one calm line in place of the card, then it folds away
         const e = D.decisions()[0];
         const verb = e && e.verb === "Answered" ? `Answered “${e.said}”` : e ? e.verb : "Done";
-        morph(frame, () => { frame.className = "card is-dock r-done"; frame.innerHTML = `<p class="tp-done${how === "back" ? " is-back" : ""}" role="status"><span class="tp-done-ic">${how === "back" ? ICON.rewind : ICON.check}</span><span><b>${esc(verb)}.</b> ${how === "back" ? "It's taking another route." : "It's back at work."}</span><span class="tp-done-u">Undo with U</span></p>`; }, { duration: 300 });
+        morph(frame, () => { frame.className = "card is-dock r-done"; frame.innerHTML = `<p class="tp-done${how === "back" ? " is-back" : ""}" role="status"><span class="tp-done-ic">${how === "back" ? ICON.rewind : ICON.check}</span><span><b>${esc(verb)}.</b> ${how === "back" ? "It's taking another route." : "It's back at work."}</span><button type="button" class="tp-done-u" data-dock-undo>Undo</button></p>`; }, { duration: 300 });
         await wait(2200);
       }
       TD.busy = false;
@@ -924,6 +962,13 @@ function dockRender(needs) {
     },
   });
 }
+tdock.addEventListener("click", (e) => {
+  const f = e.target.closest("[data-fold]");
+  if (f) { S.dockFold[f.dataset.fold] = true; dockRender(D.needItems()); scroller.focus({ preventScroll: true }); return; }
+  const u = e.target.closest("[data-unfold]");
+  if (u) { delete S.dockFold[u.dataset.unfold]; dockRender(D.needItems()); requestAnimationFrame(() => tdock.querySelector(".card")?.focus({ preventScroll: true })); return; }
+  if (e.target.closest("[data-dock-undo]")) D.undo();
+});
 tdock.addEventListener("keydown", (e) => {
   const card = tdock.querySelector(".card");
   if (!card) return;
@@ -979,14 +1024,15 @@ function heraldRender(needs) {
     // live: an honest, persistent line when XO can't be reached or can't take messages (P0-8)
     const c = connLine(world.state.status, world.state.statusError, world.state.error);
     html = `<div class="hr hr-conn k-${c.kind}" role="status"><span class="hr-ic ${c.kind === "down" ? "k-stopped" : "k-calm"}">${c.kind === "down" ? ICON.retry : ICON.pause}</span><span class="hr-t">${esc(c.text)}</span><span class="hr-s">${esc(c.sub)}</span></div>`;
-  } else if (S.view === "home" || convThread(S.view)) html = "";
-  else if (sealed()) html = `<div class="hr hr-calm"><span class="hr-ic k-calm">${ICON.moon}</span><span class="hr-t">Sealed until morning</span></div>`;
+  } else if (S.view === "home" || convThread(S.view) || sealed()) html = "";
   else {
+    // Only when something is worth your time. The quiet states ("Nothing needs you", "Sealed")
+    // are already said by the sidebar's Home row and by Home, so no line sits here for them.
     const P0 = homeParts(needs);
     const nd = P0.active.length;
     html = nd && P0.next
-      ? `<button type="button" class="hr hr-need" data-next title="Take the next move (N)"><i class="hr-dot" aria-hidden="true"></i><span class="hr-t"><b>${nd}</b> worth your time</span><span class="hr-s">next is ${EFFORT[P0.next.effort].long}</span>${ICON.right}</button>`
-      : `<div class="hr hr-calm"><span class="hr-ic k-ok">${ICON.check}</span><span class="hr-t">Nothing needs you</span></div>`;
+      ? `<button type="button" class="hr hr-need" data-next title="Take the next move"><i class="hr-dot" aria-hidden="true"></i><span class="hr-t"><b>${nd}</b> worth your time</span><span class="hr-s">next is ${EFFORT[P0.next.effort].long}</span>${ICON.right}</button>`
+      : "";
   }
   const was = box._h;
   if (patch(box, html) && was != null && html) box.firstElementChild?.classList.add("is-in");
@@ -1020,7 +1066,7 @@ function chipRender(fade = false) {
   const s = sessionOf(S.view);
   const html = IQ.chipHtml(s, PHONE.matches);
   chip.title = IQ.chipTitle(s);
-  chip.setAttribute("aria-label", `Intelligence: ${IQ.chipTitle(s).replace(/ \(M\)$/, "")}`);
+  chip.setAttribute("aria-label", `Intelligence: ${IQ.chipTitle(s).replace(/ \([^)]*\)$/, "")}`);
   chip.classList.toggle("is-pinned", IQ.current(s).pinned);
   if (chip._h === html) return;
   const swap = () => { chip.innerHTML = html; chip._h = html; };
@@ -1126,8 +1172,6 @@ say.addEventListener("keydown", (e) => {
     }
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); atList.hidden = true; return; }
   }
-  // M opens the intelligence popover while the composer is empty (or ⌘. anywhere)
-  if ((e.key === "m" || e.key === "M") && !say.value && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); IQ.open(sessionOf(S.view), $("#iq")); return; }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); say.blur(); }
 });
@@ -1384,6 +1428,7 @@ function saveScroll() {
 }
 function go(v, { from, focus = false } = {}) {
   if (!v) return;
+  closeSettings({ restore: false });
   setDrawer(false);
   IQ.close({ restore: false });
   if (v === S.view) { if (focus) say.focus(); return; }
@@ -1522,9 +1567,9 @@ $("#home").addEventListener("keydown", (e) => {
   const n = homeParts().next;
   if (!n || n.key !== card.dataset.key) return;
   if (/^[1-9]$/.test(e.key) && Array.isArray(n.ask.options) && !Kit.isBinary(n.ask) && n.effort === "glance") { const o = n.ask.options[+e.key - 1]; if (o != null) { e.preventDefault(); e.stopPropagation(); nextDecide({ option: o }); } }
-  else if (e.key === "a" && Kit.isBinary(n.ask) && n.effort === "glance") { e.preventDefault(); e.stopPropagation(); nextDecide("allow"); }
-  else if ((e.key === "d" || e.key === "D") && n.effort === "glance") { e.preventDefault(); e.stopPropagation(); card.querySelector("[data-nx-back]")?.click(); }
-  else if (e.key === "e" || e.key === "E" || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); decideKey(n.key); }
+  else if (K.is(e, "allow") && Kit.isBinary(n.ask) && n.effort === "glance") { e.preventDefault(); e.stopPropagation(); nextDecide("allow"); }
+  else if (K.is(e, "back") && n.effort === "glance") { e.preventDefault(); e.stopPropagation(); card.querySelector("[data-nx-back]")?.click(); }
+  else if (K.is(e, "details") || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); decideKey(n.key); }
 });
 function openNext() {
   const P0 = homeParts();
@@ -1717,14 +1762,101 @@ jump.addEventListener("mousedown", (e) => { if (e.target === jump) closeJump(); 
 
 // ── keys sheet ──────────────────────────────────────────────────────────────
 const keys = $("#keys");
-function soundRender() { const b = $("#sound-tog"); b.setAttribute("aria-pressed", String(sound.on)); b.innerHTML = `${ICON.sound}Sounds ${sound.on ? "on" : "off"}`; }
+function soundRender() { $("#sound-tog").setAttribute("aria-checked", String(sound.on)); }
 $("#sound-tog").addEventListener("click", () => { sound.on = !sound.on; soundRender(); sound.play("allow"); });
 keys.addEventListener("click", (e) => { if (e.target === keys || e.target.closest("[data-close]")) closeKeys(); });
 let keysReturn = null;
-function openKeys() { keysReturn = document.activeElement; keys.hidden = false; keys.querySelector("[data-close]").focus(); }
+function openKeys() { keysSheetRender(); keysReturn = document.activeElement; keys.hidden = false; keys.querySelector("[data-close]").focus(); }
 function closeKeys() { keys.hidden = true; keysReturn?.focus?.({ preventScroll: true }); }
-$("#help-side").addEventListener("click", openKeys);
-$("#help-phone").addEventListener("click", openKeys);
+
+// ── settings: a page over the main area; closing it returns exactly where you were ──
+const setEl = $("#settings");
+let setReturn = null;
+function setPage(id) {
+  for (const b of $$("[data-set]")) b.setAttribute("aria-selected", String(b.dataset.set === id));
+  for (const p of $$("[data-page]")) p.hidden = p.dataset.page !== id;
+}
+function openSettings() {
+  if (!setEl.hidden) return;
+  setReturn = document.activeElement;
+  setDrawer(false);
+  if (D.isOpen()) D.close();
+  IQ.close({ restore: false });
+  setEl.hidden = false;
+  $("#set-side").classList.add("is-on");
+  $("#set-side").setAttribute("aria-expanded", "true");
+  setEl.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+}
+function closeSettings({ restore = true } = {}) {
+  if (setEl.hidden) return;
+  if (S.recording) { S.recording = null; keysPageRender(); }
+  setEl.hidden = true;
+  $("#set-side").classList.remove("is-on");
+  $("#set-side").setAttribute("aria-expanded", "false");
+  if (restore) setReturn?.focus?.({ preventScroll: true });
+}
+$("#set-side").addEventListener("click", () => (setEl.hidden ? openSettings() : closeSettings()));
+$("#set-phone").addEventListener("click", openSettings);
+$("#set-x").addEventListener("click", () => closeSettings());
+for (const b of $$("[data-set]")) b.addEventListener("click", () => setPage(b.dataset.set));
+
+// ── shortcuts: one list (keys.js) drives the handlers, the tooltips, the sheet and this page ──
+function keysSheetRender() {
+  const col = (ids) => `<dl class="keys">${ids.map((g) => `<dt class="kh">${esc(K.GROUPS.find((x) => x.id === g).name)}</dt><dd></dd>` +
+    K.ACTIONS.filter((a) => a.scope === g).map((a) => `<dt><kbd>${esc(K.label(a.id))}</kbd></dt><dd>${esc(a.label)}</dd>`).join("")).join("")}</dl>`;
+  $("#keys-cols").innerHTML = col(["global"]) + col(["decision", "intel"]);
+}
+function keysPageRender() {
+  const box = $("#set-keys-list");
+  const rec = S.recording, err = S.keyErr;
+  box.innerHTML = `<p class="kp-t">Click a key to change it. Keys that work anywhere need ⌘ or Ctrl, or a symbol like / or ?, so typing never sets them off. Your keys are kept in this browser.</p>` +
+    K.GROUPS.map((g) => `<section class="kg" aria-labelledby="kg-${g.id}"><h3 id="kg-${g.id}">${esc(g.name)}</h3><div class="kl">` +
+      K.ACTIONS.filter((a) => a.scope === g.id).map((a) => {
+        const key = a.fixed
+          ? `<span class="kr-k is-fixed" title="This one is fixed"><kbd>${esc(a.fixed)}</kbd></span>`
+          : `<button type="button" class="kr-k${rec === a.id ? " is-rec" : ""}" data-rebind="${a.id}" aria-label="${esc(a.label)}: ${esc(K.label(a.id))}. ${rec === a.id ? "Press the new key, or Esc to cancel" : "Change it"}">${rec === a.id ? `<span class="kr-rec">Press a key…</span>` : `<kbd>${esc(K.label(a.id))}</kbd>`}</button>`;
+        const reset = !a.fixed && K.changed(a.id) ? `<button type="button" class="kr-r" data-kreset="${a.id}" title="Back to ${esc(K.show(a.def))}" aria-label="Reset ${esc(a.label)} to ${esc(K.show(a.def))}">${ICON.retry}</button>` : `<span class="kr-r" aria-hidden="true"></span>`;
+        return `<div class="kr${K.changed(a.id) ? " is-changed" : ""}${a.fixed ? " is-fixed" : ""}"><span class="kr-l">${esc(a.label)}</span>${key}${reset}</div>` +
+          (err && err.id === a.id ? `<p class="kr-err" role="alert">${esc(err.msg)}</p>` : "");
+      }).join("") + `</div></section>`).join("") +
+    `<div class="kp-f"><button type="button" class="btn" id="keys-reset-all"${K.anyChanged() ? "" : " disabled"}>${ICON.retry}Reset all to defaults</button></div>`;
+  if (rec) box.querySelector(`[data-rebind="${rec}"]`)?.focus({ preventScroll: true });
+}
+$("#set-keys-list").addEventListener("click", (e) => {
+  const rb = e.target.closest("[data-rebind]");
+  if (rb) { S.keyErr = null; S.recording = S.recording === rb.dataset.rebind ? null : rb.dataset.rebind; keysPageRender(); return; }
+  const rs = e.target.closest("[data-kreset]");
+  if (rs) { S.keyErr = null; K.reset(rs.dataset.kreset); return; }
+  if (e.target.closest("#keys-reset-all")) { S.keyErr = null; S.recording = null; K.resetAll(); }
+});
+document.addEventListener("pointerdown", (e) => {
+  // a click anywhere but a key chip cancels a recording
+  if (S.recording && !e.target.closest?.("[data-rebind]")) { S.recording = null; S.keyErr = null; keysPageRender(); }
+}, true);
+addEventListener("keydown", (e) => {
+  if (!S.recording) return;
+  e.preventDefault(); e.stopPropagation();
+  if (e.key === "Escape" && !e.metaKey && !e.ctrlKey) { S.recording = null; S.keyErr = null; keysPageRender(); return; }
+  const combo = K.fromEvent(e);
+  if (!combo) return; // a modifier on its own: keep listening
+  const id = S.recording;
+  const r = K.set(id, combo);
+  S.recording = null;
+  S.keyErr = r.error ? { id, msg: r.error } : null;
+  keysPageRender();
+  $(`[data-rebind="${id}"]`)?.focus({ preventScroll: true });
+  if (r.ok) announce(`${K.ACTIONS.find((a) => a.id === id).label}: ${K.label(id)}`);
+}, true);
+K.onChange(() => { keysPageRender(); if (!keys.hidden) keysSheetRender(); schedule(); });
+keysPageRender();
+setEl.querySelector(".set-nav").addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  e.preventDefault();
+  const tabs = $$("[data-set]");
+  const i = tabs.indexOf(document.activeElement);
+  const nx = tabs[(i + (e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+  nx.focus(); setPage(nx.dataset.set);
+});
 
 // ── theme toggle ────────────────────────────────────────────────────────────
 $("#theme").addEventListener("click", () => {
@@ -1735,12 +1867,20 @@ $("#theme").addEventListener("click", () => {
 });
 
 // ── global keys ─────────────────────────────────────────────────────────────
+const GLOBAL = {
+  jump: () => (jump.hidden ? openJump() : closeJump()),
+  intel: () => (IQ.isOpen ? IQ.close() : IQ.open(sessionOf(S.view), $("#iq"))),
+  write: () => say.focus(),
+  keys: () => openKeys(),
+};
 addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); jump.hidden ? openJump() : closeJump(); return; }
-  if ((e.metaKey || e.ctrlKey) && e.key === ".") { e.preventDefault(); IQ.isOpen ? IQ.close() : IQ.open(sessionOf(S.view), $("#iq")); return; }
+  if (S.recording) return; // Settings › Keyboard is listening for a new key
+  // ⌘/Ctrl keys work everywhere, even while typing
+  for (const id of ["jump", "intel"]) if (K.hasMod(id) && K.is(e, id)) { e.preventDefault(); GLOBAL[id](); return; }
   if (!jump.hidden || dlg.open || IQ.isOpen) return;
   if (e.key === "Escape") {
     if (!keys.hidden) { closeKeys(); return; }
+    if (!setEl.hidden) { closeSettings(); return; }
     if (!allEl.hidden) { closeAll(); return; }
     if ($("#app").classList.contains("drawer")) { setDrawer(false); return; }
     if (D.isOpen()) { D.close(); return; }
@@ -1749,25 +1889,9 @@ addEventListener("keydown", (e) => {
   }
   if (e.target.matches?.("input, textarea, [contenteditable]") || e.metaKey || e.ctrlKey || e.altKey) return;
   if (!keys.hidden || !allEl.hidden) return;
-  const k = e.key;
-  if (k === "?") { e.preventDefault(); openKeys(); }
-  else if (k === "/") { e.preventDefault(); say.focus(); }
-  else if (k === "n" || k === "N") { e.preventDefault(); openNext(); }
-  else if (k === "h" || k === "H") { e.preventDefault(); go("home"); }
-  else if (k === "w" || k === "W") { e.preventDefault(); go("ws"); }
-  else if (k === "t" || k === "T") { if (S.view.startsWith("p:") || convThread(S.view)) { e.preventDefault(); openAll(); } }
-  else if (k === "u" || k === "U") { if (D.undo()) e.preventDefault(); }
-  else if (k === "c" || k === "C") { const th = convThread(S.view); if (th) { e.preventDefault(); S.ckOpen[th.id] = !S.ckOpen[th.id]; checklistRender(D.needItems()); } }
-  else if (k === "[" || k === "]") {
-    const pid = convProject(S.view);
-    if (!pid || pid === "workspace") return;
-    const ts = threadsOf(pid).sort((a, b) => SORT_STATE[a.state] - SORT_STATE[b.state] || b.lastAt - a.lastAt);
-    if (!ts.length) return;
-    e.preventDefault();
-    const i = ts.findIndex((t) => "t:" + t.id === S.view);
-    const nx = ts[(i + (k === "]" ? 1 : ts.length - 1) + (i < 0 && k === "[" ? 1 : 0)) % ts.length];
-    go("t:" + nx.id, { from: S.view.startsWith("t:") ? S.parent[S.view] : S.view });
-  }
+  // Only keys that can't be hit by accident: no single letters (a stray keystroke must never
+  // navigate or open something). Decision keys live on a focused decision card only.
+  for (const id of Object.keys(GLOBAL)) if (K.is(e, id)) { e.preventDefault(); GLOBAL[id](); return; }
 });
 
 // ── boot ────────────────────────────────────────────────────────────────────
@@ -1779,6 +1903,10 @@ $("#ic-ws").innerHTML = XO;
 $("#pb-menu").innerHTML = ICON.menu;
 $("#side-x").innerHTML = ICON.close;
 $("#pn-x").innerHTML = ICON.close;
+$("#set-x").innerHTML = ICON.close;
+$("#set-side").innerHTML = ICON.gear;
+$("#set-phone").innerHTML = ICON.gear;
+$("#sound-tog .th-knob").innerHTML = ICON.sound;
 for (const x of $$(".sheet [data-close]")) x.innerHTML = ICON.close;
 $("#jump-ic").innerHTML = ICON.search;
 $("#all-ic").innerHTML = ICON.search;
