@@ -192,6 +192,15 @@ button:disabled{cursor:default}
 .pr-d{width:6px;height:6px;border-radius:1.5px;background:currentColor;transform:rotate(45deg)}
 .pr-t{min-width:0;font-size:12.5px;line-height:1.35;color:var(--ink-4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;animation:line-in .32s var(--glide)}
 @keyframes line-in{from{opacity:0;transform:translateY(3px)}}
+/* a row at work (hub #31): the same accent in blue, quieter than amber */
+.prow.busy{background:color-mix(in srgb,var(--info) 5%,var(--row-bg));border-color:color-mix(in srgb,var(--info) 20%,var(--row-line))}
+.prow.busy .pr-ic{background:color-mix(in srgb,var(--info) 12%,var(--g1C));border-color:color-mix(in srgb,var(--info) 28%,var(--g26));color:var(--info)}
+.prow.busy .pr-t{color:color-mix(in srgb,var(--info) 70%,var(--ink-3))}
+/* its motion: a short blue glow travels round the tile's border, the Next move card's orbit at tile size */
+@property --pr-a{syntax:"<angle>";inherits:false;initial-value:0deg}
+@keyframes pr-orbit{to{--pr-a:360deg}}
+.prow.busy .pr-ic{border-color:transparent;background:linear-gradient(color-mix(in srgb,var(--info) 12%,var(--g1C)),color-mix(in srgb,var(--info) 12%,var(--g1C))) padding-box,conic-gradient(from var(--pr-a),transparent 0deg,color-mix(in srgb,var(--info) 95%,transparent) 70deg,transparent 140deg) border-box,linear-gradient(color-mix(in srgb,var(--info) 26%,var(--g26)),color-mix(in srgb,var(--info) 26%,var(--g26))) border-box;box-shadow:0 0 10px -3px color-mix(in srgb,var(--info) 45%,transparent);animation:pr-orbit 2.8s linear infinite}
+@media (prefers-reduced-motion:reduce){.prow.busy .pr-ic{animation:none}}
 /* the accent: a row that needs you tints its tile and name, and shows a short label */
 .prow.needs .pr-ic{background:color-mix(in srgb,var(--warn) 13%,var(--g1C));border-color:color-mix(in srgb,var(--warn) 30%,var(--g26));color:var(--warn)}
 .prow.needs .pr-name{color:color-mix(in srgb,var(--warn) 22%,var(--ink))}

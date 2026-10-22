@@ -181,6 +181,7 @@ const VW = createViewer({ announce }); // a shared file beside the conversation 
 
 // ── world helpers ───────────────────────────────────────────────────────────
 const projects = () => world.state.projects.filter((p) => p.id !== "workspace");
+const RUNNING = new Set(["queued", "starting", "running", "stopping"]); // a session on a turn (storm.js BUSY)
 const threadsOf = (pid) => world.state.threads.filter((t) => t.project === pid && t.state !== "resolved");
 const convThread = (v) => (v && v.startsWith("t:") ? world.thread(v.slice(2)) : null);
 const convProject = (v) => (v === "ws" || v === "home" ? "workspace" : v.startsWith("p:") ? v.slice(2) : convThread(v)?.project);
@@ -298,17 +299,23 @@ function sideRender(needs) {
     const on = S.view === "p:" + p.id || convThread(S.view)?.project === p.id;
     const asks = quiet ? [] : mine.filter((x) => x.t.project === p.id);
     const lead = asks.find((x) => x.group !== "stopped" && x.risk !== "destructive") || asks[0];
-    const busy = threadsOf(p.id).some(isBusy);
+    // every thread with work running counts, a resolved one too (its turn or sub-agents can outlive the
+    // resolve), and so does the project's coordinator while it's on a turn
+    const nBusy = world.state.threads.filter((t) => t.project === p.id && (t.state === "resolved" ? t.busy === true : isBusy(t))).length;
+    const coordBusy = !!p.chatId && Object.values(world.state.sessions || {}).some((x) => x.chat_id === p.chatId && x.role === "project-coordinator" && RUNNING.has(x.state));
+    const busy = nBusy > 0 || coordBusy;
     const needsMe = asks.length > 0;
-    const label = needsMe ? askShort(lead) : "";
+    // hub #31: a project at work reads blue at a glance; what needs you (amber, red) still wins the row
+    const working = busy && !needsMe;
+    const label = needsMe ? askShort(lead) : working ? (nBusy > 1 ? `${nBusy} threads working` : nBusy ? "Working" : "Coordinator working") : "";
     const kind = needsMe ? (lead.risk === "destructive" || lead.group === "stopped" ? "red" : "amber") : "";
     const was = sideRender.needs?.get(p.id) || 0;
     if (asks.length > was && sideRender.ready && !RM.matches) S.wash.set(p.id, { n: (S.wash.get(p.id)?.n || 0) + 1, until: now + 2600 });
     const w = S.wash.get(p.id);
     const washing = w && w.until > now;
     return { key: p.id, html:
-      `<button type="button" class="prow${needsMe ? ` needs k-${kind}` : ""}${on ? " is-on" : ""}${washing ? " wash" : ""}${q && pi === S.pfCur ? " is-cur" : ""}" data-go="p:${esc(p.id)}" data-w="${washing ? w.n : 0}"${on ? ' aria-current="page"' : ""} aria-label="${esc(p.name)}${needsMe ? `. ${asks.length} need${asks.length === 1 ? "s" : ""} you: ${esc(label)}` : busy ? ". Working" : ""}">` +
-      `<span class="pr-ic" aria-hidden="true">${ICON.project}${busy ? `<i class="pr-busy"></i>` : ""}</span>` +
+      `<button type="button" class="prow${needsMe ? ` needs k-${kind}` : working ? " busy" : ""}${on ? " is-on" : ""}${washing ? " wash" : ""}${q && pi === S.pfCur ? " is-cur" : ""}" data-go="p:${esc(p.id)}" data-w="${washing ? w.n : 0}"${on ? ' aria-current="page"' : ""} aria-label="${esc(p.name)}${needsMe ? `. ${asks.length} need${asks.length === 1 ? "s" : ""} you: ${esc(label)}` : busy ? ". Working" : ""}">` +
+      `<span class="pr-ic" aria-hidden="true">${ICON.project}${busy && needsMe ? `<i class="pr-busy"></i>` : ""}</span>` +
       `<span class="pr-main"><span class="pr-l1"><span class="pr-name">${esc(p.name)}</span>${needsMe ? `<span class="pr-w" aria-hidden="true"><i class="pr-d"></i>${asks.length}</span>` : ""}</span>` +
       (label ? `<span class="pr-t">${esc(label)}</span>` : "") + `</span></button>` };
   });
