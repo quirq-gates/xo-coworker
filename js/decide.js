@@ -286,11 +286,11 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   }
 
   // ── deciding ──────────────────────────────────────────────────────────────
-  function decide(n, choice, note = "", { secs = null } = {}) {
+  function decide(n, choice, note = "", { secs = null, inline = false } = {}) {
     note = String(note || "").trim();
     // one decision per ask: a second press (a double-click, a key during the card's exit) does nothing
     if (queue.has(n.key) || sentKeys.has(n.key) || (F.open && /^(allow|back)$/.test(F.status.get(n.key) || ""))) return null;
-    if (n.ask.item) return decideItem(n, choice, note, secs);
+    if (n.ask.item) return decideItem(n, choice, note, secs, inline);
     let taught = false, scope = null;
     if (choice === "allow" && teach.get(n.key)) {
       const cmd = Kit.commandOf(n.ask);
@@ -309,7 +309,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     teach.delete(n.key);
     if (choice === "allow" && n.ask.kind === "permission") rules.noteAllowed(n, taught, scope);
     if (F.open) F.status.set(n.key, choice === "deny" ? "back" : "allow");
-    queue.push([{ key: n.key, n, t: n.t, ask: n.ask, choice, note, stopped, entry }], { verb, label: done ? n.t.title : said ? `${said}` : n.ask.title, deny: choice === "deny" });
+    queue.push([{ key: n.key, n, t: n.t, ask: n.ask, choice, note, stopped, entry }], { verb, label: done ? n.t.title : said ? `${said}` : n.ask.title, deny: choice === "deny", inline });
     sound.play(choice === "deny" ? "back" : "allow");
     announce(done ? `Done: ${n.t.title} will be resolved. Undo for 3 seconds.` : `${verb}${said ? `: ${said}` : ""}. Undo for 3 seconds.`);
     toastRender();
@@ -318,7 +318,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   }
 
   /** A storm item: the request body is built now (so a bad choice is refused before the window). */
-  function decideItem(n, choice, note, secs) {
+  function decideItem(n, choice, note, secs, inline) {
     const it = n.ask.item;
     const P = itemParts(it);
     if (choice === "allow" && teach.get(n.key)) choice = { scope: P.scopes.find((o) => o.id === teach.get(n.key)) };
@@ -334,7 +334,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     log.unshift(entry);
     teach.delete(n.key);
     if (F.open) F.status.set(n.key, no ? "back" : "allow");
-    queue.push([{ key: n.key, n, t: n.t, ask: n.ask, choice: { storm: true, body }, note: "", stopped: false, entry }], { verb, label: said || it.title, deny: no });
+    queue.push([{ key: n.key, n, t: n.t, ask: n.ask, choice: { storm: true, body }, note: "", stopped: false, entry }], { verb, label: said || it.title, deny: no, inline });
     sound.play(no ? "back" : "allow");
     announce(`${verb}${said ? `: ${said}` : ""}. Undo for 3 seconds.`);
     toastRender();
@@ -641,7 +641,8 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     const ready = () => performance.now() - shownAt >= Kit.READ_MS;
     const secs = () => Math.max(2, Math.round((performance.now() - shownAt) / 1000));
     // decide, then move on: only when a decision was queued (a repeat press or a refused choice stays put)
-    const go = (choice, how, note = "") => { const entry = decide(n, choice, note, { secs: secs() }); if (entry) ctx.after(how); return entry; };
+    // the thread's own card says what it did, with its own Undo, in place: no second box (the toast) for it
+    const go = (choice, how, note = "") => { const entry = decide(n, choice, note, { secs: secs(), inline: ctx.surface === "dock" }); if (entry) ctx.after(how); return entry; };
     let noteMode = null;
     const body = frame;
     const step = ctx.onStep || null;
@@ -959,7 +960,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   const toast = $("#toast");
   let toastItem = null;
   function toastRender() {
-    const it = queue.queued[queue.queued.length - 1];
+    const it = [...queue.queued].reverse().find((x) => !x.meta.inline);
     if (!it) {
       if (toastItem) { toast.classList.add("bye"); setTimeout(() => { if (!queue.queued.length) { toast.hidden = true; toast.classList.remove("bye"); } }, 200); }
       toastItem = null;

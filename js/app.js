@@ -1259,7 +1259,8 @@ function dockRender(needs) {
         const e = D.decisions()[0];
         const verb = e && e.verb === "Answered" ? `Answered “${e.said}”` : e ? e.verb : "Done";
         morph(frame, () => { frame.className = "card is-dock r-done"; frame.innerHTML = `<p class="tp-done${how === "back" ? " is-back" : ""}" role="status"><span class="tp-done-ic">${how === "back" ? ICON.rewind : ICON.check}</span><span><b>${esc(verb)}.</b> ${how === "back" ? "It's taking another route." : "It's back at work."}</span><button type="button" class="tp-done-u" data-dock-undo>Undo</button></p>`; }, { duration: 300 });
-        await wait(2200);
+        // the only Undo for this decision now: it stays for the whole 3 s window
+        await wait(RM.matches ? 3000 : 2700);
       }
       TD.busy = false;
       TD.key = "__settling";
