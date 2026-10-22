@@ -424,7 +424,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     const { md, more } = excerptMarkdown(a.full || a.detail || "", 600);
     const items = [...t.checklist.items].sort((x, y) => (x.state === "done") - (y.state === "done"));
     const ck = items.map((i) => `<li class="ck ck-${esc(i.state)}"><span class="ck-m" aria-hidden="true">${MARK(i.state)}</span><span>${renderInline(i.text || "", true)}</span></li>`).join("");
-    const main = md ? `<div class="prose dt-ex${more ? " is-more" : ""}">${renderMarkdown(md)}</div>${more ? `<p class="dt-more">The rest is in the thread.</p>` : ""}` : `<p class="dt-why">Open the thread to see what it needs.</p>`;
+    const main = md ? `<div class="prose dt-ex${more ? " is-more" : ""}">${renderMarkdown(md)}</div>${more ? `<button type="button" class="dt-more" data-act="thread" title="Open the thread${K.hint("open")}">The rest is in the thread ${ICON.chevron}</button>` : ""}` : `<p class="dt-why">Open the thread to see what it needs.</p>`;
     return `<div class="dt"><div class="dt-main">${main}</div>` +
       (items.length ? `<div class="dt-side"><h4>Checklist <span>${t.checklist.done} of ${t.checklist.total}</span></h4><ol class="ck-list">${ck}</ol>${t.branch ? `<p class="ev-br">${ICON.branch}<code>${esc(t.branch)}</code></p>` : ""}</div>` : "") + `</div>`;
   }

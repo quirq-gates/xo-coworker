@@ -845,7 +845,9 @@ body.panel-open .dock{right:calc(var(--pw) + 24px)}
 .dt-main>.dt-why:first-child{margin-top:0}
 .dt-ex{font-size:var(--fs-base);line-height:1.55;color:var(--ink-2)}
 .dt-ex.is-more{max-height:15.5em;overflow:hidden;-webkit-mask-image:linear-gradient(180deg,#000 72%,transparent);mask-image:linear-gradient(180deg,#000 72%,transparent)}
-.dt-more{margin-top:6px;font-size:var(--fs-sm);color:var(--ink-4)}
+.dt-more{display:inline-flex;align-items:center;gap:4px;height:28px;margin:4px 0 0 -8px;padding:0 8px;border-radius:8px;font:500 var(--fs-sm)/1 var(--sans);color:var(--ink-3);transition:background var(--dur-fast),color var(--dur-fast)}
+.dt-more:hover{background:var(--bg-3);color:var(--ink)}
+.dt-more svg{width:12px;height:12px;transform:rotate(-90deg)}
 .dt-sug{margin-top:10px;font-size:var(--fs-base);line-height:1.55;color:var(--ink-3)}
 .dt-sug b{font-weight:550;color:var(--ink-2)}
 .dt-side{align-self:start;padding:12px 14px;border-radius:14px;background:var(--g18);border:1px solid var(--g24)}
