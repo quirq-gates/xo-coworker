@@ -1631,6 +1631,27 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .tb-end svg{flex:none;width:16px;height:16px;padding:1px}
 .tb-end.is-err{color:var(--err-ink)}
 .tb-end.is-stop{color:var(--ink-3)}
+/* a turn's work, folded to one line (hub #29): the count, the live ticker, what changed, what failed */
+.tb-work{display:flex;flex-direction:column;gap:2px}
+.tb-wh .tb-ht{color:var(--ink-3)}
+.tb-work.is-live .tb-wh .tb-ht{color:var(--ink-2)}
+.tb-work.is-waiting .tb-wh .tb-ht{color:var(--warn)}
+.tb-work .elapsed{font-variant-numeric:tabular-nums}
+.tb-wn{flex:none;font:450 var(--fs-xs)/1 var(--mono);color:var(--ink-4);font-variant-numeric:tabular-nums}
+.tb-wn::before{content:"·";margin-right:7px;color:var(--ink-4)}
+.tb-work>.tb:not(.tb-work){margin-left:24px}
+.tb-work>.tb-narr{font-size:var(--fs-base);color:var(--ink-3)}
+.tb-rail{display:flex;flex-direction:column;gap:4px;margin:2px 0 4px 7px;padding-left:16px;border-left:1px solid var(--g26)}
+.tb-rail .tb-narr{font-size:var(--fs-base);color:var(--ink-3)}
+.tb-bad{margin-top:0}
+.tb-chg{list-style:none;display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 2px 24px}
+.tb-cf{display:inline-flex;align-items:center;gap:6px;max-width:260px;height:28px;padding:0 10px 0 8px;border-radius:8px;background:var(--g1A);border:1px solid var(--g26);font:500 var(--fs-sm)/1 var(--sans);color:var(--ink-2);transition:background var(--dur-fast),border-color var(--dur-fast),color var(--dur-fast),transform 80ms var(--press)}
+.tb-cf:hover{background:var(--g1F);border-color:var(--g33);color:var(--ink)}
+.tb-cf:active{transform:scale(.97)}
+.tb-cfi{flex:none;display:grid;place-items:center;color:var(--ink-4)}
+.tb-cfi svg{width:13px;height:13px}
+.tb-cfn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tb-cf.is-more{padding:0 10px;color:var(--ink-4)}
 
 /* paused: it waits on you (shape: an outlined diamond, amber) */
 .g-paused{border:1.6px solid var(--warn);border-radius:1.5px;transform:rotate(45deg) scale(.8)}
