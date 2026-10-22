@@ -301,6 +301,14 @@ await (async () => {
     let err2 = null;
     try { await p; } catch (e) { err2 = e; }
     t("a caller's own abort stays an AbortError, not a timeout", () => assert.equal(err2 && err2.name, "AbortError"));
+    // Coder's sign-in redirect (c7f1e12): fetch never follows it, and it reads as signed out, not a CORS error
+    let opts3 = null, err3 = null;
+    globalThis.fetch = async (url, opts) => { opts3 = opts; return { type: "opaqueredirect", ok: false, status: 0 }; };
+    try { await request("/chat/status"); } catch (e) { err3 = e; }
+    t("a Coder sign-in redirect is not followed and reads as signed out (Rohan's fix stays)", () => {
+      assert.equal(opts3.redirect, "manual");
+      assert.equal(err3 && err3.code, "signed_out");
+    });
   } finally {
     globalThis.fetch = real;
   }
