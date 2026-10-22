@@ -7,7 +7,7 @@ import { renderMarkdown, renderInline, threadLinks, excerptMarkdown } from "../j
 import { parseChecklist, tasksOf } from "../js/model.js";
 import { request } from "../js/api.js";
 import { highlight, langOf } from "../js/highlight.js";
-import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
+import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sharedFileRoute, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
 
 let passed = 0;
 const t = (name, fn) => {
@@ -48,6 +48,13 @@ t("bold, italic, code, lists, fences", () => {
   assert.ok(out.includes("<ol><li>x</li><li>y</li></ol>"));
   assert.ok(out.includes('<div class="md-code"><div class="md-code-head"><span>py</span>'));
   assert.ok(out.includes('<span class="tk-bi">print</span><span class="tk-pun">(</span><span class="tk-str">&#39;&lt;hi&gt;&#39;</span>'), out);
+});
+t("tables: escaped cells, pipes inside code, alignment (the file viewer's reports)", () => {
+  const out = renderMarkdown("| Tag | Meaning |\n|---|:--:|\n| `a|b` | **x** <i> |\n\nafter");
+  assert.match(out, /<table><thead><tr><th>Tag<\/th><th style="text-align:center">Meaning<\/th>/);
+  assert.match(out, /<td><code>a\|b<\/code><\/td>/);
+  assert.ok(out.includes("&lt;i&gt;") && !out.includes("<i>"));
+  assert.ok(!renderMarkdown("a | b\nnot a table").includes("<table"));
 });
 t("snake_case is not italic", () => {
   assert.ok(!renderInline("thread_budget_usd and XO_ROUTER_MODE").includes("<em>"));
@@ -235,6 +242,18 @@ t("code colours: escape-first, per language, plain when unknown (if1 #3)", () =>
   assert.ok(Date.now() - t0 < 1500, `190 kB in ${Date.now() - t0} ms`);
   const open = renderMarkdown("Here:\n```js\nconst a = 1");
   assert.match(open, /tk-kw">const</, "a fence still streaming is coloured too");
+});
+
+t("a shared file maps to its project route, or says there's none (if1 #2)", () => {
+  const plain = { project: "fuckface", cwd: "/home/coder/fuckface", worktree: null };
+  assert.deepEqual(sharedFileRoute(plain, "research/hidden-psych-experiments.md"), { project: "fuckface", rel: "research/hidden-psych-experiments.md" });
+  assert.deepEqual(sharedFileRoute(plain, "/home/coder/fuckface/README.md"), { project: "fuckface", rel: "README.md" });
+  const wt = { project: "app", cwd: "/home/coder/app/.xo/worktrees/thread-cmsg_1", worktree: "/home/coder/app/.xo/worktrees/thread-cmsg_1" };
+  assert.deepEqual(sharedFileRoute(wt, "src/a.ts"), { project: "app", rel: ".xo/worktrees/thread-cmsg_1/src/a.ts" });
+  assert.ok(sharedFileRoute(plain, "../secrets.txt").why, "never outside the folder");
+  assert.ok(sharedFileRoute(plain, "/etc/passwd").why, "never an absolute path elsewhere");
+  assert.ok(sharedFileRoute({ project: "x", cwd: "/tmp/elsewhere" }, "a.md").why, "a folder that isn't the project's: no guess");
+  assert.ok(sharedFileRoute(null, "a.md").why, "a plain chat has no route");
 });
 
 // ── a request that never settles gives up (if1 #6) ─────────────────────────

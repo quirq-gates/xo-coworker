@@ -1,8 +1,8 @@
 // A small, safe Markdown renderer for chat messages.
 //
 // Supported: paragraphs (soft line breaks kept), headings, bullet and numbered
-// lists (one level of nesting by indent), blockquotes, horizontal rules,
-// fenced code blocks (with a copy button), inline code, **bold**, *italic*,
+// lists (one level of nesting by indent), blockquotes, horizontal rules, tables,
+// fenced code blocks (with a copy button and colours, js/highlight.js), inline code, **bold**, *italic*,
 // _italic_, ~~strike~~, [links](…) and bare http(s) URLs.
 //
 // Safety: the input is never interpreted as HTML. Every piece of text goes
@@ -85,6 +85,7 @@ export function renderInline(text, noLinks = false) {
 }
 
 const FENCE = /^\s{0,3}(```+|~~~+)\s*([\w+#.-]*)\s*$/;
+const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const BULLET = /^(\s*)[-*+]\s+(.*)$/;
 const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
@@ -100,6 +101,29 @@ function codeBlock(lang, code) {
     `<button type="button" class="md-copy" data-copy aria-label="Copy code">Copy</button></div>` +
     `<pre><code${hl != null ? ' class="hl"' : ""}>${hl ?? esc(code)}</code></pre></div>`
   );
+}
+
+/** A table row's cells: split on "|" outside `code`, with the outer pipes dropped. */
+function cells(line) {
+  const out = [];
+  let cur = "", tick = false;
+  const t = line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (c === "\\" && t[i + 1] === "|") { cur += "|"; i++; continue; }
+    if (c === "`") tick = !tick;
+    if (c === "|" && !tick) { out.push(cur.trim()); cur = ""; continue; }
+    cur += c;
+  }
+  out.push(cur.trim());
+  return out;
+}
+function renderTable(head, sep, rows) {
+  const align = cells(sep).map((c) => (/^:-+:$/.test(c) ? "center" : /-+:$/.test(c) ? "right" : ""));
+  const td = (tag, c, i) => `<${tag}${align[i] ? ` style="text-align:${align[i]}"` : ""}>${renderInline(c)}</${tag}>`;
+  const h = cells(head);
+  return `<div class="md-table"><table><thead><tr>${h.map((c, i) => td("th", c, i)).join("")}</tr></thead>` +
+    `<tbody>${rows.map((r) => { const rc = cells(r); return `<tr>${h.map((_, i) => td("td", rc[i] ?? "", i)).join("")}</tr>`; }).join("")}</tbody></table></div>`;
 }
 
 function renderList(lines) {
@@ -161,6 +185,15 @@ export function renderMarkdown(src) {
       flush();
       out.push("<hr>");
       i++;
+      continue;
+    }
+    if (line.includes("|") && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1]) && lines[i + 1].includes("-")) {
+      flush();
+      const head = line, sep = lines[i + 1];
+      const rows = [];
+      i += 2;
+      while (i < lines.length && lines[i].trim() && lines[i].includes("|")) rows.push(lines[i++]);
+      out.push(renderTable(head, sep, rows));
       continue;
     }
     const h = HEADING.exec(line);

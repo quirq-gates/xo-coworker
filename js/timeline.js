@@ -267,3 +267,31 @@ export function hopLine(h, project) {
     default: return "";
   }
 }
+
+/**
+ * Where a thread's shared file can be read (if1 #2): {project, rel} for the project-scoped
+ * `/api/xo-projects/<project>/file` route, or {why} when there's no route. A shared file's path is
+ * relative to the thread's folder: the project folder itself (a project without git), or its
+ * worktree `<project>/.xo/worktrees/thread-<ts>/`. Anything else has no route: it's said, never guessed.
+ */
+export function sharedFileRoute(thread, path) {
+  const none = { why: "This file is in a folder XO doesn't serve to the UI yet." };
+  if (!thread || !thread.project) return none;
+  let p = String(path || "").replace(/\\/g, "/");
+  const root = String(thread.worktree || thread.cwd || "").replace(/\/+$/, "");
+  // an absolute path inside the thread's own folder is the same file
+  if (p.startsWith("/")) { if (root && p.startsWith(root + "/")) p = p.slice(root.length + 1); else return none; }
+  p = p.replace(/^\.\//, "");
+  if (!p || p.split("/").some((seg) => seg === ".." || seg === "")) return none;
+  if (thread.worktree) {
+    const i = String(thread.worktree).indexOf("/.xo/worktrees/");
+    if (i < 0) return none;
+    const sub = String(thread.worktree).slice(i + 1).replace(/\/+$/, "");
+    if (!/^\.xo\/worktrees\/[^/]+$/.test(sub)) return none;
+    return { project: thread.project, rel: `${sub}/${p}` };
+  }
+  const cwd = String(thread.cwd || "").replace(/\/+$/, "");
+  if (cwd && cwd.split("/").pop() === thread.project) return { project: thread.project, rel: p };
+  return none;
+}
+

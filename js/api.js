@@ -208,6 +208,8 @@ export const api = {
   scheduleRuns: (id, query = {}) => get(`/schedules/${enc(id)}/runs`, query),
 
   // ── projects ──────────────────────────────────────────────────────────────
+  /** A text file inside a project, for the file viewer: {name, kind, size_bytes, truncated, content, …}. */
+  projectFile: (project, relativePath) => get(`/xo-projects/${enc(project)}/file`, { relative_path: relativePath }),
   /** Where xo-projects live: {roots: {...}, default}. Never hard-code the root. */
   workspaceConfig: () => get("/config/workspace"),
   /** Scaffold a new xo-project (xo-cowork-api). 409 when the folder exists. */

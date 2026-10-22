@@ -23,12 +23,13 @@ import { createNight } from "./night.js";
 import { createIntel } from "./intel.js";
 import { EFFORT, HELD_SEED, estLine, evidenceFor } from "./content.js";
 import { ICON, XO, NEXT_GLYPH, $, $$, RM, clock, dayOf, short, elapsed, reconcile, sound, wait, dial, morph, expand, shifted } from "./ui.js";
-import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText, hopLine } from "./timeline.js";
+import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText, hopLine, sharedFileRoute } from "./timeline.js";
 import { turnHtml } from "./turnview.js";
 import { itemParts } from "./review.js";
 import { runsStripHtml, runsListHtml, runViewHtml } from "./runsview.js";
 import { createSettings } from "./settings.js";
 import { createChats } from "./chats.js";
+import { createViewer } from "./viewer.js";
 
 const world = createWorld();
 // Demo-only features (seeded content, the night, rules, finds, Stop) never run against the real backend.
@@ -175,6 +176,7 @@ const CH = createChats({
   },
 });
 world.ui = { tbOpen: S.tbOpen }; // turn blocks open or folded, shared with the Chats view
+const VW = createViewer({ announce }); // a shared file beside the conversation (if1 #2)
 
 // ── world helpers ───────────────────────────────────────────────────────────
 const projects = () => world.state.projects.filter((p) => p.id !== "workspace");
@@ -1847,6 +1849,8 @@ function go(v, { from, focus = false } = {}) {
   if (!v) return;
   // an edit or menu in a thread's header belongs to that visit
   S.tEdit = null; S.tMenu = null;
+  // the file viewer belongs to the conversation it was opened from
+  if (v !== S.view) VW.close({ restore: false });
   closeSettings({ restore: false });
   setDrawer(false);
   IQ.close({ restore: false });
@@ -1922,6 +1926,15 @@ function decideKey(key, opts) {
     return;
   }
   D.open(key, opts);
+}
+
+// ── shared files: open in the viewer beside the conversation (if1 #2) ──
+function openSharedFile(btn) {
+  const f = { path: btn.dataset.file, name: btn.dataset.fileName, type: btn.dataset.fileType, bytes: btn.dataset.fileBytes === "" ? null : Number(btn.dataset.fileBytes) };
+  const t = convThread(S.view);
+  // only a thread's own folder maps to a project route; a plain chat's files have none yet
+  const route = DEMO ? { why: "Files open from live threads. Demo threads don't have real files." } : sharedFileRoute(t, f.path);
+  VW.open({ ...f, ...route }, btn);
 }
 
 // ── a thread's own header (live): resolve and reopen with Undo (R1), rename, label ──
@@ -2051,6 +2064,8 @@ document.addEventListener("click", (e) => {
   if (r) { retry(r.dataset.retry); return; }
   const ed = t.closest("[data-edit]");
   if (ed) { editFailed(ed.dataset.edit); return; }
+  const fb = t.closest("[data-file]");
+  if (fb) { openSharedFile(fb); return; }
   const cp = t.closest("[data-copy]");
   if (cp) { navigator.clipboard?.writeText(cp.closest(".md-code")?.querySelector("code")?.textContent || "").catch(() => {}); cp.textContent = "Copied"; setTimeout(() => { cp.textContent = "Copy"; }, 1400); }
 });
@@ -2395,6 +2410,7 @@ addEventListener("keydown", (e) => {
   if (!jump.hidden || dlg.open || IQ.isOpen) return;
   if (e.key === "Escape") {
     if (RS.open) { runsEscape(); return; }
+    if (VW.isOpen) { VW.close(); return; }
     if (!keys.hidden) { closeKeys(); return; }
     if (!setEl.hidden) { closeSettings(); return; }
     if (!allEl.hidden) { closeAll(); return; }

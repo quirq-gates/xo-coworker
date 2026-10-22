@@ -81,7 +81,8 @@ function blockHtml(b, open, live, now) {
     case "shared_files": {
       const files = b.files || [];
       return `<div class="tb tb-files"><p class="tb-fh">${ICON.doc}<span>${esc(b.header || "Shared files")}${b.caption ? ` · ${esc(b.caption)}` : ""}</span></p>` +
-        `<ul class="tb-fl">${files.map((f) => `<li class="tb-file" title="${esc(f.path || f.name)}"><span class="tb-fi">${ICON.doc}</span><span class="tb-fn">${esc(f.name || f.path)}</span><span class="tb-fm">${esc([String(f.type || "").split("/").pop(), size(f.bytes)].filter(Boolean).join(" · "))}</span></li>`).join("")}</ul></div>`;
+        // each file opens in the viewer beside the conversation (if1 #2, js/viewer.js)
+        `<ul class="tb-fl">${files.map((f) => `<li class="tb-file"><button type="button" class="tb-fb" data-file="${esc(f.path || f.name)}" data-file-name="${esc(f.name || f.path)}" data-file-type="${esc(f.type || "")}" data-file-bytes="${esc(f.bytes ?? "")}" title="${esc(f.path || f.name)}" aria-label="Open ${esc(f.name || f.path)}"><span class="tb-fi">${ICON.doc}</span><span class="tb-ft"><span class="tb-fn">${esc(f.name || f.path)}</span><span class="tb-fm">${esc([String(f.type || "").split("/").pop(), size(f.bytes)].filter(Boolean).join(" · "))}</span></span><span class="tb-fo" aria-hidden="true">Open${ICON.chevron}</span></button></li>`).join("")}</ul></div>`;
     }
     case "narration":
       return `<div class="tb tb-narr prose">${renderMarkdown(b.text || "")}</div>`;
