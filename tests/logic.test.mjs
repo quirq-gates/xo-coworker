@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { renderMarkdown, renderInline, threadLinks, excerptMarkdown } from "../js/markdown.js";
 import { parseChecklist, tasksOf } from "../js/model.js";
 import { request } from "../js/api.js";
+import { highlight, langOf } from "../js/highlight.js";
 import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
 
 let passed = 0;
@@ -46,7 +47,7 @@ t("bold, italic, code, lists, fences", () => {
   assert.ok(out.includes("<ul><li>one</li><li>two<ul><li>nested</li></ul></li></ul>"), out);
   assert.ok(out.includes("<ol><li>x</li><li>y</li></ol>"));
   assert.ok(out.includes('<div class="md-code"><div class="md-code-head"><span>py</span>'));
-  assert.ok(out.includes("print(&#39;&lt;hi&gt;&#39;)"));
+  assert.ok(out.includes('<span class="tk-bi">print</span><span class="tk-pun">(</span><span class="tk-str">&#39;&lt;hi&gt;&#39;</span>'), out);
 });
 t("snake_case is not italic", () => {
   assert.ok(!renderInline("thread_budget_usd and XO_ROUTER_MODE").includes("<em>"));
@@ -207,6 +208,33 @@ t("a long reply's excerpt is whole blocks, and says there's more (if1 #5)", () =
   const f = excerptMarkdown("```js\n" + "x = 1;\n".repeat(400) + "```", 600);
   assert.ok(f.more && f.md.endsWith("```"), "an open fence is closed");
   assert.deepEqual(excerptMarkdown("Done. The file is saved."), { md: "Done. The file is saved.", more: false });
+});
+
+t("code colours: escape-first, per language, plain when unknown (if1 #3)", () => {
+  const out = renderMarkdown("```html\n<script>alert(1)</script>\n```");
+  assert.ok(!out.includes("<script") && out.includes("&lt;script"), out);
+  assert.match(out, /<code class="hl">/);
+  assert.match(renderMarkdown("```\nplain\n```"), /<code>plain<\/code>/, "no language: plain");
+  const unk = renderMarkdown("```brainfuck\n+[<]>\n```");
+  assert.match(unk, /<span>brainfuck<\/span>/); assert.match(unk, /<code>\+\[&lt;\]&gt;<\/code>/, "unknown: plain, labelled");
+  assert.match(highlight('const a = "x"; // c', "ts"), /tk-kw">const<.*tk-str">&quot;x&quot;<.*tk-com">\/\/ c</);
+  assert.match(highlight("echo $HOME # hi", "bash"), /tk-var">\$HOME<.*tk-com"># hi</);
+  assert.match(highlight('{"k": 1}', "json"), /tk-prop">&quot;k&quot;</);
+  assert.match(highlight("def f():\n  return None", "python"), /tk-fn">f<.*tk-bi">None</s);
+  assert.match(highlight("SELECT 1 -- c", "sql"), /tk-kw">SELECT</);
+  assert.match(highlight("+a\n-b\n@@ x", "diff"), /tk-add">\+a<.*tk-del">-b<.*tk-hunk/s);
+  assert.equal(langOf("yml"), "yaml"); assert.equal(langOf("Markdown"), "md"); assert.equal(langOf("cobol"), null);
+  for (const lang of ["js", "py", "sh", "json", "yaml", "html", "css", "sql", "md", "diff"]) {
+    const nasty = `<img src=x onerror=alert(1)> "' & \` ${"\\"} </span>`;
+    const h = highlight(nasty, lang);
+    assert.ok(!/<img|<\/span><\/span>|onerror=alert\(1\)>/.test(h.replace(/<span class="tk-\w+">|<\/span>/g, "")), lang);
+    assert.equal(h.replace(/<span class="tk-\w+">|<\/span>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#96;/g, "`").replace(/&amp;/g, "&"), nasty, `${lang}: the text survives exactly`);
+  }
+  const big = "const x = 1; // a line\n".repeat(8000);
+  const t0 = Date.now(); highlight(big, "js");
+  assert.ok(Date.now() - t0 < 1500, `190 kB in ${Date.now() - t0} ms`);
+  const open = renderMarkdown("Here:\n```js\nconst a = 1");
+  assert.match(open, /tk-kw">const</, "a fence still streaming is coloured too");
 });
 
 // ── a request that never settles gives up (if1 #6) ─────────────────────────

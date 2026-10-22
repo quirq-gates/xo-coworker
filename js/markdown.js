@@ -12,6 +12,7 @@
 // renders as its plain text.
 
 import { esc } from "./util.js";
+import { highlight } from "./highlight.js";
 
 const THREAD_HREF = /^#(cmsg_[A-Za-z0-9_-]{1,128})$/;
 const HTTP_HREF = /^https?:\/\/[^\s<>"'`]+$/i;
@@ -92,10 +93,12 @@ const RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 
 function codeBlock(lang, code) {
   const label = lang ? esc(lang) : "code";
+  // colours only split the escaped text into spans (js/highlight.js): code never becomes HTML
+  const hl = highlight(code, lang);
   return (
     `<div class="md-code"><div class="md-code-head"><span>${label}</span>` +
     `<button type="button" class="md-copy" data-copy aria-label="Copy code">Copy</button></div>` +
-    `<pre><code>${esc(code)}</code></pre></div>`
+    `<pre><code${hl != null ? ' class="hl"' : ""}>${hl ?? esc(code)}</code></pre></div>`
   );
 }
 

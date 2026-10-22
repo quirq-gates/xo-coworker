@@ -509,6 +509,41 @@ body.panel-open .conv{--rp:calc(var(--pw) + 28px)}
 .md-copy:hover{background:var(--bg-3);color:var(--ink)}
 .md-code pre{margin:0;padding:12px 16px;overflow-x:auto;font:400 var(--fs-base)/1.65 var(--mono)}
 .md-code code{background:none;border:0;padding:0;font:inherit}
+/* Code colours (js/highlight.js, if1 #3): mixed from the palette's own hues toward ink, so each
+   theme's hue (darkened in light) keeps its contrast on the code surface. Comments recede. */
+:root{
+  --code-ink:var(--ink-2);
+  --code-com:var(--ink-4);
+  --code-kw:color-mix(in srgb,var(--violet) 82%,var(--ink));
+  --code-str:color-mix(in srgb,var(--accent) 78%,var(--ink));
+  --code-num:color-mix(in srgb,var(--warn) 80%,var(--ink));
+  --code-fn:color-mix(in srgb,var(--info) 85%,var(--ink));
+  --code-bi:color-mix(in srgb,var(--info) 55%,var(--accent));
+  --code-prop:color-mix(in srgb,var(--info) 50%,var(--ink));
+  --code-tag:color-mix(in srgb,var(--err-ink) 80%,var(--ink));
+  --code-pun:var(--ink-3);
+  --code-var:color-mix(in srgb,var(--warn) 70%,var(--ink));
+  --code-add:var(--accent); --code-add-bg:color-mix(in srgb,var(--accent-fill) 10%,transparent);
+  --code-del:var(--err-ink); --code-del-bg:color-mix(in srgb,var(--err) 10%,transparent);
+}
+code.hl{color:var(--code-ink)}
+.tk-com{color:var(--code-com);font-style:italic}
+.tk-kw{color:var(--code-kw)}
+.tk-str{color:var(--code-str)}
+.tk-num{color:var(--code-num)}
+.tk-fn{color:var(--code-fn)}
+.tk-bi{color:var(--code-bi)}
+.tk-prop{color:var(--code-prop)}
+.tk-tag{color:var(--code-tag)}
+.tk-pun{color:var(--code-pun)}
+.tk-var{color:var(--code-var)}
+.tk-head{color:var(--ink);font-weight:600}
+.tk-em{color:var(--ink);font-weight:550}
+.tk-meta{color:var(--code-com)}
+.tk-hunk{color:var(--code-fn)}
+.tk-add,.tk-del{display:inline-block;min-width:100%}
+.tk-add{color:var(--code-add);background:var(--code-add-bg)}
+.tk-del{color:var(--code-del);background:var(--code-del-bg)}
 
 /* threads inline in the project chat: the chronological record */
 .tcard{position:relative;isolation:isolate;display:flex;align-items:stretch;margin-top:12px;border-radius:16px;background:var(--surface);border:1px solid var(--g25);transition:border-color var(--dur-fast),background var(--dur-fast)}

@@ -19,6 +19,7 @@ import * as K from "./keys.js";
 import { EFFORT, effortOf, rank, evidenceFor, leverageOf, suggestFor, whyLine, estLine } from "./content.js";
 import { ICON, $, RM, clock, sound, dial, wait, morph, expand } from "./ui.js";
 import { renderMarkdown, renderInline, excerptMarkdown } from "./markdown.js";
+import { highlight } from "./highlight.js";
 import { itemParts, itemBody, questionsOf, evidenceOf, itemEffort, isNo, VERB, holdWords as holdWordsOf } from "./review.js";
 import { clientId as newKey } from "./api.js";
 
@@ -391,6 +392,8 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
 
   function changeBlock(c) {
     if (!c) return "";
+    const hl = c.lang !== "diff" ? highlight(c.text, c.lang) : null;
+    if (hl != null) return `<figure class="chg"><figcaption>${ICON.doc}<span>${esc(c.label)}</span></figcaption><pre><code class="hl">${hl}</code></pre></figure>`;
     const lines = esc(c.text).split("\n").map((l) => {
       const cls = c.lang === "diff" ? (l.startsWith("+") ? "dl-add" : l.startsWith("-") ? "dl-del" : "") : "";
       return `<span class="${cls}">${l || " "}</span>`;
