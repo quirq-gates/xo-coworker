@@ -18,7 +18,7 @@ import * as Kit from "./kit.js";
 import * as K from "./keys.js";
 import { EFFORT, effortOf, rank, evidenceFor, leverageOf, suggestFor, whyLine, estLine } from "./content.js";
 import { ICON, $, RM, clock, sound, dial, wait, morph, expand } from "./ui.js";
-import { renderMarkdown, renderInline } from "./markdown.js";
+import { renderMarkdown, renderInline, excerptMarkdown } from "./markdown.js";
 import { itemParts, itemBody, questionsOf, evidenceOf, itemEffort, isNo, VERB, holdWords as holdWordsOf } from "./review.js";
 import { clientId as newKey } from "./api.js";
 
@@ -411,6 +411,21 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
       (t.branch ? `<p class="ev-br">${ICON.branch}<code>${esc(t.branch)}</code></p>` : "") + `</div></div>`;
   }
 
+  /**
+   * A live thread waiting on you (if1 #5): what it needs as a short, formatted excerpt (the whole
+   * reply is in the thread, one press away), and its checklist with what's left first. No messages
+   * repeated: the card is a summary, the thread is the record.
+   */
+  function waitingDetailsHtml(n) {
+    const t = n.t, a = n.ask;
+    const { md, more } = excerptMarkdown(a.full || a.detail || "", 600);
+    const items = [...t.checklist.items].sort((x, y) => (x.state === "done") - (y.state === "done"));
+    const ck = items.map((i) => `<li class="ck ck-${esc(i.state)}"><span class="ck-m" aria-hidden="true">${MARK(i.state)}</span><span>${renderInline(i.text || "", true)}</span></li>`).join("");
+    const main = md ? `<div class="prose dt-ex${more ? " is-more" : ""}">${renderMarkdown(md)}</div>${more ? `<p class="dt-more">The rest is in the thread.</p>` : ""}` : `<p class="dt-why">Open the thread to see what it needs.</p>`;
+    return `<div class="dt"><div class="dt-main">${main}</div>` +
+      (items.length ? `<div class="dt-side"><h4>Checklist <span>${t.checklist.done} of ${t.checklist.total}</span></h4><ol class="ck-list">${ck}</ol>${t.branch ? `<p class="ev-br">${ICON.branch}<code>${esc(t.branch)}</code></p>` : ""}</div>` : "") + `</div>`;
+  }
+
   /** An answer button. A preview, when there is one, sits in a small swatch so the button never looks disabled. */
   function optHtml(o, i, ev) {
     const pv = ev.preview ? ev.preview.find((p) => p.label === o) : null;
@@ -525,6 +540,8 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     const doneBtn = `<button type="button" class="b b-done" data-act="done" title="It's finished: resolve the thread${K.hint("done")}" aria-keyshortcuts="${K.label("done")}"><span class="b-l">${ICON.check}Done</span></button>`;
     act += canDone ? `<div class="c-btns">${primary}${doneBtn}</div>` : a.stopByYou || a.replyOnly ? `<div class="c-btns one">${primary}</div>` : `<div class="c-btns">${primary}${secondary}</div>`;
     const low = [];
+    // a live waiting thread: the way to read all of it is the thread itself (if1 #5)
+    if (a.live && a.replyOnly && !a.pending && surface === "panel" && !t.host) low.push(`<button type="button" class="b-later b-open" data-act="thread" title="Open the thread beside the panel${K.hint("open")}">${ICON.arrow}Open the thread</button>`);
     if (teachable) low.push(`<button type="button" class="teach-tog" data-act="teach" aria-pressed="${!!scope}" title="Make it a rule${K.hint("rule")}"><span class="sw" aria-hidden="true"></span>${reps >= 2 ? `<span class="rep">${ord(reps + 1)} time this week</span> · ` : ""}Make it a rule</button>`);
     if (destructive) low.push(`<button type="button" class="b-later" data-act="later" title="Plan for later today${K.hint("later")}">${ICON.clock}Later today</button><span class="c-low-t">or skip to the easier ones</span>`);
     else if (n.effort === "think") low.push(`<button type="button" class="b-later" data-act="later" title="Plan for later today${K.hint("later")}">${ICON.clock}Later today</button>`);
@@ -548,7 +565,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
       `<h3 class="c-h" id="card-h-${id}">${headline(n)}</h3>` +
       (line ? `<p class="c-line" id="card-why-${id}">${esc(line)}</p>` : "") + facts + est + sug +
       `<div class="dis${openEv ? " is-open" : ""}" data-dis="ev"><button type="button" class="dis-h" aria-expanded="${openEv}" aria-controls="dt-${id}" title="Details${K.hint("details")}">${ICON.chevron}<span>Details</span></button>` +
-      `<div class="dis-b" id="dt-${id}"${openEv ? "" : " hidden"}><div class="dis-in">${storm ? itemDetailsHtml(n) : detailsHtml(n, ev)}</div></div></div>` +
+      `<div class="dis-b" id="dt-${id}"${openEv ? "" : " hidden"}><div class="dis-in">${storm ? itemDetailsHtml(n) : a.live ? waitingDetailsHtml(n) : detailsHtml(n, ev)}</div></div></div>` +
       `</div>` +
       `<div class="c-act">${act}<p class="c-hint" aria-live="polite"></p></div></div>`;
   }

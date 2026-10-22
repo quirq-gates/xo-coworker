@@ -3,7 +3,7 @@
 //   node tests/logic.test.mjs            (UI server on 127.0.0.1:5180)
 //   XO_UI=http://127.0.0.1:5180 node tests/logic.test.mjs
 import assert from "node:assert/strict";
-import { renderMarkdown, renderInline, threadLinks } from "../js/markdown.js";
+import { renderMarkdown, renderInline, threadLinks, excerptMarkdown } from "../js/markdown.js";
 import { parseChecklist, tasksOf } from "../js/model.js";
 import { request } from "../js/api.js";
 import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
@@ -198,6 +198,16 @@ await (async () => {
   await mapLimit([1, 2, 3, 4, 5, 6, 7, 8, 9], 3, async () => { now++; peak = Math.max(peak, now); await new Promise((r) => setTimeout(r, 5)); now--; });
   t("mapLimit caps parallel fetches", () => assert.equal(peak, 3));
 })();
+
+t("a long reply's excerpt is whole blocks, and says there's more (if1 #5)", () => {
+  const long = Array.from({ length: 12 }, (_, i) => `## Part ${i}\n\n- point **${i}** with a few more words in it\n- and another`).join("\n\n");
+  const r = excerptMarkdown(long, 600);
+  assert.ok(r.more && r.md.length < 900 && r.md.startsWith("## Part 0"));
+  assert.ok(!/\n$/.test(r.md));
+  const f = excerptMarkdown("```js\n" + "x = 1;\n".repeat(400) + "```", 600);
+  assert.ok(f.more && f.md.endsWith("```"), "an open fence is closed");
+  assert.deepEqual(excerptMarkdown("Done. The file is saved."), { md: "Done. The file is saved.", more: false });
+});
 
 // ── a request that never settles gives up (if1 #6) ─────────────────────────
 await (async () => {

@@ -198,6 +198,38 @@ export function renderMarkdown(src) {
   return out.join("");
 }
 
+/**
+ * The start of a long message, for a short excerpt (if1 #5): whole blocks up to about `max`
+ * characters, cut only at a blank line outside a code fence. A first block longer than that is cut
+ * at a word (and an open fence closed). Returns {md, more}.
+ */
+export function excerptMarkdown(src, max = 600) {
+  const lines = String(src ?? "").replace(/\r\n?/g, "\n").trim().split("\n");
+  let fence = null, len = 0, cut = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const f = FENCE.exec(lines[i]);
+    if (f && !fence) fence = f[1];
+    else if (fence && lines[i].trim().startsWith(fence)) fence = null;
+    if (!fence && !lines[i].trim() && len >= max * 0.5) {
+      if (len >= max) { cut = i; break; }
+      // the next block would run far past the limit: stop before it
+      let next = 0;
+      for (let j = i + 1; j < lines.length && lines[j].trim(); j++) next += lines[j].length + 1;
+      if (len + next > max * 1.4) { cut = i; break; }
+    }
+    len += lines[i].length + 1;
+  }
+  let md = lines.slice(0, cut).join("\n").trim();
+  let more = cut < lines.length && lines.slice(cut).some((l) => l.trim());
+  if (md.length > max * 1.5) {
+    md = md.slice(0, max).replace(/\s+\S*$/, "") + "…";
+    more = true;
+    const open = md.split("\n").filter((l) => FENCE.test(l)).length % 2 === 1;
+    if (open) md += "\n```";
+  }
+  return { md, more };
+}
+
 /** Every "#cmsg_…" thread id linked from a message, in order. */
 export function threadLinks(src) {
   const ids = [];
