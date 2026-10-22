@@ -1193,7 +1193,8 @@ function dockRender(needs) {
   frame.appendChild(inner);
   frame.setAttribute("aria-labelledby", inner.querySelector(".c-h").id);
   const what = t.host ? "chat" : "thread";
-  frame.insertAdjacentHTML("beforeend", `<button type="button" class="dock-hide" data-fold="${esc(n.key)}" title="Fold it away and read the ${what} first">${ICON.chevron}<span>Read the ${what} first</span></button>`);
+  // it sits in the card's own top row, on the effort label's line (hub #27), not floating over it
+  (inner.querySelector(".c-top") || frame).insertAdjacentHTML("beforeend", `<button type="button" class="dock-hide" data-fold="${esc(n.key)}" title="Fold it away and read the ${what} first">${ICON.chevron}<span>Read the ${what} first</span></button>`);
   morph(tdock, () => { tdock.innerHTML = ""; tdock.appendChild(frame); }, { duration: prev ? 300 : 360, fade: frame });
   D.wireCard(frame, inner, n, {
     surface: "dock",

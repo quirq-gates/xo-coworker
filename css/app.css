@@ -580,13 +580,15 @@ code.hl{color:var(--code-ink)}
 .tc-open:focus-visible{outline:none}
 .tcard:has(.tc-open:focus-visible){border-color:rgba(var(--accent-rgb),.6);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.14)}
 
-.ev{display:flex;align-items:center;gap:9px;margin:-8px 0 16px 44px;font-size:var(--fs-base);color:var(--ink-3);border-radius:10px}
-.ev-ic{flex:none;display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:rgba(var(--accent-rgb),.12);color:var(--accent)}
-.ev-ic svg{width:11px;height:11px}
+/* An event line sits on the conversation's grid (hub #23): its icon centred in the avatar column,
+   its words on the message column, its time in quiet mono on the right. */
+.ev{display:flex;align-items:center;gap:14px;min-height:22px;margin:-8px 0 16px;font-size:var(--fs-base);line-height:1.4;color:var(--ink-3);border-radius:10px}
+.ev-ic{flex:none;display:grid;place-items:center;width:22px;height:22px;margin:0 4px;border-radius:50%;background:rgba(var(--accent-rgb),.12);color:var(--accent)}
+.ev-ic svg{width:13px;height:13px}
 .ev-back .ev-ic{background:var(--bg-3);color:var(--ink-3)}
 .ev-stop .ev-ic{background:rgb(215 55 63 / .14);color:var(--err-ink)}
 .ev-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ev time{margin-left:auto;font-size:var(--fs-xs);color:var(--ink-4)}
+.ev time{flex:none;margin-left:auto;font:400 var(--fs-xs)/1 var(--mono);color:var(--ink-4);font-variant-numeric:tabular-nums}
 
 .typing{display:grid;grid-template-columns:30px minmax(0,1fr);gap:14px;align-items:center;padding-bottom:8px;animation:msg-in .3s var(--glide)}
 .av-w{position:relative}
@@ -1097,7 +1099,7 @@ button.mr-t:hover b{text-decoration:underline;text-underline-offset:3px}
 
 /* the thread's own card: after a decision, one calm line, then it folds away */
 /* Read the thread first: the docked ask folds into one slim line; the conversation isn't dimmed */
-.dock-hide{position:absolute;top:12px;right:12px;z-index:2;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px 0 8px;border-radius:9px;color:var(--ink-3);font:500 var(--fs-sm)/1 var(--sans);transition:background var(--dur-fast),color var(--dur-fast),transform 90ms var(--press)}
+.dock-hide{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;margin:-4px -10px -4px auto;padding:0 10px 0 8px;border-radius:9px;color:var(--ink-3);font:500 var(--fs-sm)/1 var(--sans);transition:background var(--dur-fast),color var(--dur-fast),transform 90ms var(--press)}
 .dock-hide svg{width:14px;height:14px}
 .dock-hide:hover{background:var(--bg-3);color:var(--ink)}
 .dock-hide:active{transform:scale(.96)}
@@ -1523,14 +1525,15 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
    amber = waiting on you, red = failed; everything else neutral ink. */
 .m-turn{margin-bottom:14px}
 .turn{display:flex;flex-direction:column;gap:6px;max-width:66ch}
-.tb-h{display:flex;align-items:center;gap:8px;width:100%;min-height:30px;padding:4px 8px 4px 6px;margin-left:-6px;border-radius:9px;text-align:left;font-size:var(--fs-base);color:var(--ink-3);transition:background var(--dur-fast),color var(--dur-fast)}
+.tb-h{display:flex;align-items:center;gap:8px;width:100%;min-height:30px;padding:4px 8px 4px 6px;margin-left:-6px;border-radius:9px;text-align:left;font:450 var(--fs-base)/1.4 var(--sans);color:var(--ink-3);transition:background var(--dur-fast),color var(--dur-fast)}
 .tb-h:not(:disabled):hover{background:var(--row-hover);color:var(--ink-2)}
 .tb-h:disabled{cursor:default}
 .tb-hi{flex:none;display:grid;place-items:center;width:16px;height:16px;color:var(--ink-4)}
-.tb-hi svg{width:14px;height:14px}
+.tb-hi svg{width:15px;height:15px}
 .tb-ht{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tb-ht code,.tb-rl code{font:500 .92em var(--mono);color:var(--ink-2)}
-.tb-n{flex:none;font-size:var(--fs-xs);color:var(--ink-4);font-variant-numeric:tabular-nums}
+.tb-ht code,.tb-rl code{font:450 .9em/1 var(--mono);letter-spacing:-.01em;color:var(--ink-2)}
+/* the count (hub #21): a small mono chip, centred on the label's line, never a loose digit */
+.tb-n{flex:none;display:inline-grid;place-items:center;min-width:20px;height:18px;padding:0 5px;border-radius:6px;background:var(--g22);font:500 var(--fs-xs)/1 var(--mono);color:var(--ink-3);font-variant-numeric:tabular-nums}
 .tb-chev{flex:none;display:grid;place-items:center;color:var(--ink-4);transition:transform var(--dur-base) var(--glide)}
 .tb-chev svg{width:13px;height:13px}
 .tb-h[aria-expanded="true"] .tb-chev{transform:rotate(180deg)}
@@ -1540,14 +1543,14 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .tb-steps{margin:2px 0 6px 24px;padding-left:12px;border-left:1px solid var(--g26);list-style:none;display:flex;flex-direction:column;gap:6px;font-size:var(--fs-base);line-height:1.55;color:var(--ink-3)}
 .tb-rows{list-style:none;margin:2px 0 4px 24px;display:flex;flex-direction:column;gap:1px}
 .tb-rows.is-cur{margin-top:0}
-.tb-rh{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:3px 8px 3px 6px;margin-left:-6px;border-radius:8px;text-align:left;font-size:var(--fs-base);color:var(--ink-2)}
+.tb-rh{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:3px 8px 3px 6px;margin-left:-6px;border-radius:8px;text-align:left;font:400 var(--fs-base)/1.4 var(--sans);color:var(--ink-2)}
 .tb-rh.is-btn:hover{background:var(--row-hover)}
-.tb-ri{flex:none;display:grid;place-items:center;width:16px;color:var(--ink-4)}
-.tb-ri svg{width:13px;height:13px}
+.tb-ri{flex:none;display:grid;place-items:center;width:16px;height:16px;color:var(--ink-4)}
+.tb-ri svg{width:15px;height:15px}
 .tb-rl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tb-rp{flex:none;font-size:var(--fs-xs);color:var(--ink-4);font-variant-numeric:tabular-nums}
+.tb-rp{flex:none;font:400 var(--fs-xs)/1 var(--mono);color:var(--ink-4);font-variant-numeric:tabular-nums}
 .tb-m{flex:none;display:grid;place-items:center;width:16px;height:16px;font-size:9px}
-.tb-m svg{width:12px;height:12px}
+.tb-m svg{width:13px;height:13px}
 .tb-m.is-ok{color:var(--ink-4)}
 .tb-m.is-err{color:var(--err-ink)}
 .tb-m.is-den{color:var(--ink-3)}
@@ -1572,8 +1575,8 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .tb-fi svg{width:14px;height:14px}
 .tb-fn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:550 var(--fs-base)/1.2 var(--sans);color:var(--ink)}
 .tb-fm{flex:none;font-size:var(--fs-xs);color:var(--ink-4)}
-.tb-end{display:flex;align-items:center;gap:7px;font-size:var(--fs-sm);color:var(--ink-4)}
-.tb-end svg{width:12px;height:12px}
+.tb-end{display:flex;align-items:center;gap:8px;min-height:28px;font:450 var(--fs-base)/1.4 var(--sans);color:var(--ink-4)}
+.tb-end svg{flex:none;width:16px;height:16px;padding:1px}
 .tb-end.is-err{color:var(--err-ink)}
 .tb-end.is-stop{color:var(--ink-3)}
 
@@ -1678,6 +1681,10 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .rn-path i{font-style:normal;color:var(--g45)}
 .rn-path b{font:600 var(--fs-xl)/1.3 var(--sans);letter-spacing:-.01em;color:var(--ink);flex-basis:100%;margin-top:4px}
 .rn-st{display:flex;align-items:center;gap:8px;margin-top:10px}
+/* the state and its Stop read as one pair (hub #26): one height, one type size, one icon size */
+.rn-st .badge{height:28px;padding:0 11px 0 10px;border-radius:999px;font:600 var(--fs-sm)/1 var(--sans)}
+.rn-st .rn-stop{height:28px;border-radius:999px;padding:0 12px 0 10px}
+.rn-st .rn-stop svg{width:10px;height:10px}
 .rn-run{display:flex;flex-direction:column;gap:10px;padding-top:14px}
 .rn-run .prose{font-size:var(--fs-md)}
 .rn-sum{padding:10px 12px;border-radius:12px;background:var(--g17);border:1px solid var(--g22);font-size:var(--fs-base);line-height:1.5;color:var(--ink-2)}
