@@ -23,7 +23,7 @@ import { createNight } from "./night.js";
 import { createIntel } from "./intel.js";
 import { EFFORT, HELD_SEED, estLine, evidenceFor } from "./content.js";
 import { ICON, XO, NEXT_GLYPH, $, $$, RM, clock, dayOf, short, elapsed, reconcile, sound, wait, dial, morph, expand, shifted } from "./ui.js";
-import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText, hopLine, sharedFileRoute } from "./timeline.js";
+import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText, hopLine, sharedFileRoute, relayedInto } from "./timeline.js";
 import { turnHtml } from "./turnview.js";
 import { itemParts } from "./review.js";
 import { runsStripHtml, runsListHtml, runViewHtml } from "./runsview.js";
@@ -732,6 +732,14 @@ function liveMessagesOf(conv) {
       out.push({ key: `turn:${tu.id}`, at: Date.parse(tu.at) || Date.now(), seq: tu.seq, who: "turn", turn: tu, blocks, hideAnswer: said });
     }
   }
+  // your messages relayed into this thread by its coordinator (if1 #7): the relay hop names them, and they
+  // stay on the project's timeline (storm doesn't copy them), so they're shown here in place, whatever the
+  // hops setting, marked as passed on, linking back to where you wrote them
+  if (t && st.hops) {
+    const { shown, missing } = relayedInto(t, st.hops.values(), st.timeline[t.project] || [], new Set(rows.map((m) => m.id)));
+    for (const m of shown) out.push({ key: `relay:${m.id}`, at: m.at, seq: m.seq, who: "you", text: m.text, relay: { project: t.project, id: m.id, fwd: m.fwd } });
+    if (world.act.findRows) for (const x of missing) world.act.findRows(t.project, x.ids, x.seq);
+  }
   // how messages travelled to and from this thread (11 §16): hidden by default, shown by choice
   if (t && S.showHops && st.hops) {
     for (const hp of st.hops.values()) {
@@ -843,9 +851,16 @@ function msgItems(conv, needs) {
       else if (m === lastYou && (m.status === "sent" || m.sent)) meta = `<div class="meta"><time>${clock(m.at)}</time><span class="sent">Sent ${ICON.check}</span></div>`;
       let route = "";
       if (m.waiting) route = `<div class="route-row"><i class="dash" aria-hidden="true"></i>Sent to <b>${esc(m.target === "workspace" ? "the coordinator" : PROJ(m.target))}</b> · waiting for a thread</div>`;
+      else if (m.relay) {
+        // passed on into this thread: say from where, and go back there (to the message itself)
+        const r = m.relay, P = PROJ(r.project);
+        route = r.fwd
+          ? `<div class="route-row">${ICON.arrow}<span>You, in the <button type="button" class="rt-go" data-go="ws" data-go-msg="${esc(r.fwd.id)}" title="Where you wrote it"><b>Workspace</b></button> · passed on by ${esc(P)}'s coordinator</span></div>`
+          : `<div class="route-row">${ICON.arrow}<span>You, in <button type="button" class="rt-go" data-go="p:${esc(r.project)}" data-go-msg="${esc(r.id)}" title="Where you wrote it"><b>${esc(P)}'s chat</b></button> · passed on by the coordinator</span></div>`;
+      }
       else if (m.fwd) route = `<div class="route-row">${ICON.arrow}<span>Forwarded by the <button type="button" class="rt-go" data-go="ws"><b>Workspace</b></button></span></div>`;
       else if (m.routed && m.routed.length) route = `<div class="route-row">${ICON.arrow}<span>Routed to ${[...new Set(m.routed.map((r) => r.chat))].map((c) => `<button type="button" class="rt-go" data-go="p:${esc(c)}"><b>${esc(PROJ(c))}</b></button>`).join(", ")}</span></div>`;
-      html = `<div class="m m-you${cont ? " cont" : ""}${m.status === "failed" ? " is-failed" : ""}${m.status === "sending" ? " is-pending" : ""}"><div class="bubble" title="${esc(clock(m.at))}">${esc(m.text)}</div>${meta}${route}</div>`;
+      html = `<div class="m m-you${cont ? " cont" : ""}${m.relay ? " is-relay" : ""}${m.status === "failed" ? " is-failed" : ""}${m.status === "sending" ? " is-pending" : ""}"><div class="bubble" title="${esc(clock(m.at))}">${esc(m.text)}</div>${meta}${route}</div>`;
     } else if (m.who === "coord" || m.who === "agent") {
       const [name, role] = nameOf(conv, m.who);
       const av = m.who === "coord" ? `<div class="av">${XO}</div>` : `<div class="av av-t">${ICON.thread}</div>`;
@@ -1931,7 +1946,8 @@ function follow() {
   const v = S.view, t = convThread(v);
   if (CH.isChats(v)) { world.act.watch([]); world.act.watchThread(null); world.act.watchSession?.(v.startsWith("c:") ? v.slice(2) : null); CH.open(v); return; }
   world.act.watchSession?.(null);
-  if (t && S.showHops && world.act.loadHops) world.act.loadHops(t.id);
+  // a thread's hops are always read: a message relayed into it shows in place (if1 #7); their lines stay by choice
+  if (t && world.act.loadHops) world.act.loadHops(t.id);
   world.act.watch(v === "home" || v === "ws" ? ["workspace"] : v.startsWith("p:") ? [v.slice(2)] : t ? [t.project] : []);
   world.act.watchThread(t ? t.id : null);
 }
@@ -1964,6 +1980,19 @@ function decideKey(key, opts) {
     return;
   }
   D.open(key, opts);
+}
+
+/** After going to a conversation, bring one message into view and mark it for a moment (if it's loaded). */
+function showMsg(id) {
+  let tries = 0;
+  const look = () => {
+    const el = msgsEl.querySelector(`[data-k="${CSS.escape(S.alias.get(id) || id)}"]`);
+    if (!el) { if (++tries < 20) setTimeout(look, 100); return; }
+    el.scrollIntoView({ block: "center", behavior: RM.matches ? "auto" : "smooth" });
+    el.classList.remove("is-flash"); void el.offsetWidth; el.classList.add("is-flash");
+    setTimeout(() => el.classList.remove("is-flash"), 1800);
+  };
+  setTimeout(look, 120); // after the conversation has drawn and restored its scroll
 }
 
 // ── shared files: open in the viewer beside the conversation (if1 #2) ──
@@ -2031,7 +2060,7 @@ document.addEventListener("click", (e) => {
   const t = e.target;
   if (t.closest(".uxc") || t.closest("#iq-pop")) return;
   const g = t.closest("[data-go]");
-  if (g && !t.closest("#all")) { e.preventDefault(); go(g.dataset.go); return; }
+  if (g && !t.closest("#all")) { e.preventDefault(); go(g.dataset.go); if (g.dataset.goMsg) showMsg(g.dataset.goMsg); return; }
   const tl = t.closest("a[data-thread]");
   if (tl) { e.preventDefault(); if (world.thread(tl.dataset.thread)) go("t:" + tl.dataset.thread); else heraldShow({ kind: "calm", text: "That thread isn't loaded", sub: "it may be in another project" }, 3200); return; }
   if (t.closest("[data-older]")) { const c = chatOf(S.view); if (c) world.act.loadOlder(c); return; }

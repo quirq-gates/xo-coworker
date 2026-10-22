@@ -295,3 +295,28 @@ export function sharedFileRoute(thread, path) {
   return none;
 }
 
+/**
+ * Your messages relayed into a thread (if1 #7). Storm doesn't copy a relayed message into the thread:
+ * the `relay` hop into it names the message, which stays on the project's timeline. Returns
+ * {shown: [ui message], missing: [{ids, seq}]}: the owner's own messages found on the loaded
+ * timeline (each once, never one the thread already has), and per hop the ids not loaded yet,
+ * with the hop's seq as the upper bound to page back from. Someone else's words are never shown as yours.
+ */
+export function relayedInto(thread, hops, timeline, have = new Set()) {
+  const shown = [], missing = [], seen = new Set(have);
+  for (const hp of hops || []) {
+    if (!hp || hp.thread_ts !== thread.id || hp.kind !== "relay" || !(hp.message_ids || []).length) continue;
+    const lost = [];
+    for (const id of hp.message_ids) {
+      if (seen.has(id)) continue;
+      const row = timeline.find((r) => r.id === id);
+      if (!row) { lost.push(id); continue; }
+      seen.add(id);
+      const m = uiMsg(row);
+      if (m.who === "you") shown.push(m);
+    }
+    if (lost.length) missing.push({ ids: lost, seq: hp.seq ?? null });
+  }
+  return { shown, missing };
+}
+

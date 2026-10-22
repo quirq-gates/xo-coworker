@@ -7,7 +7,7 @@ import { renderMarkdown, renderInline, threadLinks, excerptMarkdown } from "../j
 import { parseChecklist, tasksOf } from "../js/model.js";
 import { request } from "../js/api.js";
 import { highlight, langOf } from "../js/highlight.js";
-import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sharedFileRoute, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
+import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sharedFileRoute, relayedInto, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
 
 let passed = 0;
 const t = (name, fn) => {
@@ -254,6 +254,26 @@ t("a shared file maps to its project route, or says there's none (if1 #2)", () =
   assert.ok(sharedFileRoute(plain, "/etc/passwd").why, "never an absolute path elsewhere");
   assert.ok(sharedFileRoute({ project: "x", cwd: "/tmp/elsewhere" }, "a.md").why, "a folder that isn't the project's: no guess");
   assert.ok(sharedFileRoute(null, "a.md").why, "a plain chat has no route");
+});
+
+t("a message relayed into a thread shows there, as yours (if1 #7)", () => {
+  const th = { id: "cmsg_t" };
+  const tl = [
+    { id: "cmsg_fwd", seq: 1792, author_kind: "owner", text: "remove the implications section", created_at: "2026-10-22T12:04:30Z", extra: { forwarded_from: { chat_id: "chat_ws", message_id: "cmsg_ws" } } },
+    { id: "cmsg_co", seq: 1793, author_kind: "agent", author_id: "project-coordinator", text: "On it.", created_at: "2026-10-22T12:04:31Z" },
+  ];
+  const hops = [
+    { id: "h1", kind: "relay", thread_ts: "cmsg_t", seq: 1803, message_ids: ["cmsg_fwd"] },
+    { id: "h2", kind: "relay", thread_ts: "cmsg_t", seq: 722, message_ids: ["cmsg_old"] },
+    { id: "h3", kind: "relay", thread_ts: "cmsg_other", seq: 9, message_ids: ["cmsg_fwd"] },
+    { id: "h4", kind: "status", thread_ts: "cmsg_t", seq: 2000, message_ids: ["cmsg_co"] },
+    { id: "h5", kind: "relay", thread_ts: "cmsg_t", seq: 1810, message_ids: ["cmsg_co", "cmsg_fwd"] },
+  ];
+  const { shown, missing } = relayedInto(th, hops, tl);
+  assert.deepEqual(shown.map((m) => m.id), ["cmsg_fwd"], "once, only the owner's words");
+  assert.equal(shown[0].who, "you"); assert.equal(shown[0].seq, 1792); assert.equal(shown[0].fwd.id, "cmsg_ws");
+  assert.deepEqual(missing, [{ ids: ["cmsg_old"], seq: 722 }], "not loaded: paged back from the hop's seq");
+  assert.equal(relayedInto(th, hops, tl, new Set(["cmsg_fwd"])).shown.length, 0, "never twice in the thread");
 });
 
 // ── a request that never settles gives up (if1 #6) ─────────────────────────

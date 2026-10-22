@@ -500,6 +500,10 @@ body.panel-open .conv{--rp:calc(var(--pw) + 28px)}
 .meta-btn svg{width:12px;height:12px}
 .route-row{display:flex;align-items:center;gap:8px;margin-top:6px;padding-right:4px;font-size:var(--fs-sm);color:var(--ink-3);animation:msg-in .3s var(--glide)}
 .route-row b{color:var(--ink-2);font-weight:600}
+/* your words passed on into a thread (if1 #7): the same bubble, set slightly apart as a copy */
+.m-you.is-relay .bubble{background:transparent;border:1px dashed var(--g3C)}
+.m.is-flash .bubble{animation:msg-flash 1.6s var(--ease)}
+@keyframes msg-flash{0%,35%{box-shadow:0 0 0 2px rgba(var(--accent-rgb),.55)}100%{box-shadow:0 0 0 2px transparent}}
 .dash{display:inline-block;width:18px;height:2px;border-radius:1px;background:linear-gradient(90deg,var(--ink-4) 50%,transparent 50%) 0 0/8px 2px;animation:dash .6s linear infinite}
 @keyframes dash{to{background-position:8px 0}}
 

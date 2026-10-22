@@ -615,6 +615,7 @@ export function stormSource(state, emit, event) {
     return row;
   }
   const threadOf = (id) => rawThreads.get(id) || null;
+  const sought = new Set(); // findRows: what was already looked for
 
   return {
     act: {
@@ -762,6 +763,31 @@ export function stormSource(state, emit, event) {
         const r = rawThreads.get(ts);
         if (!r) return;
         try { const d = await api.hops(r.chat_id, { thread: ts, before_seq: NEWEST, limit: 200 }); for (const h of d.hops || []) state.hops.set(h.id, { ...(state.hops.get(h.id) || {}), ...h, at: h.created_at }); emitSoon(); } catch { /* the stream's hops still arrive */ }
+      },
+      /**
+       * Timeline rows named by id that aren't loaded yet (a message relayed into a thread, if1 #7).
+       * There's no read by id, so this pages back from `beforeSeq` (the hop's seq bounds them from
+       * above), at most a few pages, and adds what it finds to the project's timeline. Each
+       * (project, ids) is tried once; what isn't found stays unknown, never guessed.
+       */
+      findRows: async (project, ids, beforeSeq) => {
+        const key = `${project}|${ids.join(",")}`;
+        if (sought.has(key)) return;
+        sought.add(key);
+        const chat = chatIdOf(project);
+        if (!chat) return;
+        const want = new Set(ids);
+        let before = beforeSeq != null ? beforeSeq + 1 : NEWEST;
+        try {
+          for (let page = 0; page < 5 && want.size && before; page++) {
+            const d = await api.messages(chat, { before_seq: before, limit: PAGE_MAX });
+            const rows = d.messages || [];
+            addRows(project, rows);
+            for (const r of rows) want.delete(r.id);
+            before = d.next_before_seq || null;
+          }
+        } catch { /* it stays unknown; the thread says so */ }
+        emitSoon();
       },
       /** A session's recent turns, read from its stored frames (a plain chat's work, a thread's). */
       loadTurns: async (sid) => { await loadTurns(sid); emitSoon(); },
