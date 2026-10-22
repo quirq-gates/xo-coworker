@@ -29,6 +29,7 @@ export const ACTIONS = [
   { id: "back", scope: "decision", label: "Send back, with a note", def: "d" },
   { id: "pick", scope: "decision", label: "Pick an answer", fixed: "1–9" },
   { id: "reply", scope: "decision", label: "Reply in words", def: "r" },
+  { id: "done", scope: "decision", label: "Done: resolve a thread that replied and waits", def: "c" },
   { id: "details", scope: "decision", label: "Details, in place", def: "e" },
   { id: "open", scope: "decision", label: "Open the thread beside the panel", def: "o" },
   { id: "next", scope: "decision", label: "Skip ahead (nothing is forced first)", def: "j" },

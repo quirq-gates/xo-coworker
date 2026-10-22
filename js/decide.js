@@ -125,7 +125,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
 
   // ── commit window (3 s, Undo) ─────────────────────────────────────────────
   const queue = Kit.createCommitQueue({
-    exec: (p) => Promise.resolve(p.stopped ? world.act.reply(p.t.id, p.choice.text) : p.choice && p.choice.storm ? world.act.decideItem(p.ask.item.id, p.choice.body) : Kit.answer(world, p.t, p.ask, p.choice, p.note)).then(() => {
+    exec: (p) => Promise.resolve(p.choice && p.choice.resolve ? world.act.resolve(p.t.id, true) : p.stopped ? world.act.reply(p.t.id, p.choice.text) : p.choice && p.choice.storm ? world.act.decideItem(p.ask.item.id, p.choice.body) : Kit.answer(world, p.t, p.ask, p.choice, p.note)).then(() => {
       // a held ask on a thread that kept working: the answer closes it
       if (p.t.state === "working" && p.t.asks.length) { p.t.asks = []; p.t.needsYou = ""; }
     }),
@@ -165,6 +165,12 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
             part.entry.status = "failed";
             F.status.delete(part.key);
             if (err && err.code === "secret_needs_a_call" && part.ask.item) noSecret.add(part.ask.item.id);
+            if (part.choice && part.choice.resolve) {
+              // Done that didn't land: the thread stays open and its card comes back
+              announce(`Couldn't resolve ${part.t.title}: ${err && err.message ? stop(err.message) : "XO didn't answer."} It's back in your list.`);
+              onNotSent && onNotSent(`Couldn't resolve ${part.t.title}`, `${err && err.message ? stop(err.message) : "XO didn't answer."} It's back in your list.`);
+              continue;
+            }
             announce(failLine(part, err));
             onNotSent && onNotSent(part.ask.title, failShort(err));
           }
@@ -293,17 +299,18 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
       taught = true;
     }
     const stopped = n.group === "stopped";
-    const verb = choice === "allow" ? "Allowed" : choice === "deny" ? "Sent back" : stopped ? "Asked to retry" : "Answered";
-    const said = typeof choice === "object" ? choice.option || choice.text : "";
+    const done = !!(choice && choice.resolve);
+    const verb = done ? "Done" : choice === "allow" ? "Allowed" : choice === "deny" ? "Sent back" : stopped ? "Asked to retry" : "Answered";
+    const said = typeof choice === "object" && !done ? choice.option || choice.text : "";
     const fromSug = !!(n.sug && said && said === n.sug.label) || (choice === "allow" && n.sug && n.sug.label === "Allow");
     const entry = { id: ++logN, key: n.key, verb, choice: choice === "allow" || choice === "deny" ? choice : "answer", label: n.ask.title, said, note, taught, fromSug, project: n.t.project, thread: n.t.title, tid: n.t.id, at: Date.now(), status: "queued", risk: n.risk, lev: n.lev, doneAt: n.t.checklist.done, secs: secs ?? (n.effort === "glance" ? 5 : 40) };
     log.unshift(entry);
     teach.delete(n.key);
     if (choice === "allow" && n.ask.kind === "permission") rules.noteAllowed(n, taught, scope);
     if (F.open) F.status.set(n.key, choice === "deny" ? "back" : "allow");
-    queue.push([{ key: n.key, n, t: n.t, ask: n.ask, choice, note, stopped, entry }], { verb, label: said ? `${said}` : n.ask.title, deny: choice === "deny" });
+    queue.push([{ key: n.key, n, t: n.t, ask: n.ask, choice, note, stopped, entry }], { verb, label: done ? n.t.title : said ? `${said}` : n.ask.title, deny: choice === "deny" });
     sound.play(choice === "deny" ? "back" : "allow");
-    announce(`${verb}${said ? `: ${said}` : ""}. Undo for 3 seconds.`);
+    announce(done ? `Done: ${n.t.title} will be resolved. Undo for 3 seconds.` : `${verb}${said ? `: ${said}` : ""}. Undo for 3 seconds.`);
     toastRender();
     render();
     return entry;
@@ -328,7 +335,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (F.open) F.status.set(n.key, no ? "back" : "allow");
     queue.push([{ key: n.key, n, t: n.t, ask: n.ask, choice: { storm: true, body }, note: "", stopped: false, entry }], { verb, label: said || it.title, deny: no });
     sound.play(no ? "back" : "allow");
-    announce(`${verb}${said ? `: ${said}` : ""}. Undo for 3 seconds.`);
+    announce(done ? `Done: ${n.t.title} will be resolved. Undo for 3 seconds.` : `${verb}${said ? `: ${said}` : ""}. Undo for 3 seconds.`);
     toastRender();
     render();
     return entry;
@@ -512,8 +519,11 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     const secondary = stopped
       ? `<button type="button" class="b b-back" data-act="note-reply" title="Tell it what to try${K.hint("reply")}"><span class="b-l">${ICON.edit}Tell it what to try</span></button>`
       : `<button type="button" class="b b-back" data-act="back" title="Send back with a note${K.hint("back")}" aria-keyshortcuts="${K.label("back")}"><span class="b-l">${ICON.rewind}Send back</span></button>`;
-    // Live questions are answered in words: no "Send back" that would post a non-answer (P1-6).
-    act += a.stopByYou || a.replyOnly ? `<div class="c-btns one">${primary}</div>` : `<div class="c-btns">${primary}${secondary}</div>`;
+    // Live questions are answered in words: no "Send back" that would post a non-answer (P1-6). A thread
+    // that replied and waits (needs_reply) is often finished work: Done resolves it, after the 3 s Undo (if1 #4).
+    const canDone = !!(a.replyOnly && a.live && !a.paused && !a.pending && world.act.resolve);
+    const doneBtn = `<button type="button" class="b b-done" data-act="done" title="It's finished: resolve the thread${K.hint("done")}" aria-keyshortcuts="${K.label("done")}"><span class="b-l">${ICON.check}Done</span></button>`;
+    act += canDone ? `<div class="c-btns">${primary}${doneBtn}</div>` : a.stopByYou || a.replyOnly ? `<div class="c-btns one">${primary}</div>` : `<div class="c-btns">${primary}${secondary}</div>`;
     const low = [];
     if (teachable) low.push(`<button type="button" class="teach-tog" data-act="teach" aria-pressed="${!!scope}" title="Make it a rule${K.hint("rule")}"><span class="sw" aria-hidden="true"></span>${reps >= 2 ? `<span class="rep">${ord(reps + 1)} time this week</span> · ` : ""}Make it a rule</button>`);
     if (destructive) low.push(`<button type="button" class="b-later" data-act="later" title="Plan for later today${K.hint("later")}">${ICON.clock}Later today</button><span class="c-low-t">or skip to the easier ones</span>`);
@@ -723,6 +733,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
       else if (act === "note-cancel") closeNote();
       else if (act === "retry") { go({ text: "Please try again from the failing step." }, "allow"); }
       else if (act === "thread") onOpenThread && onOpenThread(n.t.id, ctx.surface);
+      else if (act === "done") { b.classList.add("pressed"); go({ resolve: true }, "allow"); }
       else if (act === "teach") toggleTeach();
       else if (act === "later") { if (ctx.surface === "panel") setLater(); else { laterNow(n.key); ctx.after("later"); } }
     });
@@ -977,6 +988,11 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
       // words answer only a question; anything else is answered with its buttons
       if (it ? it.kind === "question" && card.querySelector('[data-act="reply"]') : !Kit.isBinary(n.ask)) { own(); card._openNote("reply"); }
       else if (it) { own(); const P = itemParts(it); refuse(`This one is answered with its buttons${P.primary ? `: ${[P.primary.label, P.back && P.back.label].filter(Boolean).join(" or ")}` : ""}.`); }
+    }
+    else if (K.is(e, "done")) {
+      own();
+      const b = card.querySelector('[data-act="done"]');
+      if (b) b.click(); else refuse("Done is for a thread that replied and waits; this one is answered with its buttons.");
     }
     else if (K.is(e, "details")) { own(); card._dis("ev"); }
     else if (K.is(e, "rule")) { own(); card._teach(); }

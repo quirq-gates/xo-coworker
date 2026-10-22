@@ -653,9 +653,10 @@ body.panel-open .main:has(#tdock > .card)::before{display:none}
 .b:active,.b.pressed{transform:scale(.97);transition-duration:50ms}
 .b-l{position:relative;z-index:1;display:inline-flex;align-items:center;gap:9px}
 .b svg{width:17px;height:17px}
-.b-allow,.b-back,.b-reply{background:transparent;border-color:var(--g33)}
-.b-allow:hover,.b-back:hover,.b-reply:hover{background:var(--g20);border-color:var(--g45)}
-.b-allow.pressed{background:color-mix(in srgb,var(--accent-fill) 16%,transparent);border-color:color-mix(in srgb,var(--accent-fill) 55%,var(--g33))}
+.b-allow,.b-back,.b-reply,.b-done{background:transparent;border-color:var(--g33)}
+.b-allow:hover,.b-back:hover,.b-reply:hover,.b-done:hover{background:var(--g20);border-color:var(--g45)}
+.b-done svg{color:var(--accent)}
+.b-allow.pressed,.b-done.pressed{background:color-mix(in srgb,var(--accent-fill) 16%,transparent);border-color:color-mix(in srgb,var(--accent-fill) 55%,var(--g33))}
 .b-allow svg{color:var(--accent)}
 .b-allow.arming::after{content:"";position:absolute;left:0;bottom:0;height:2px;width:100%;background:rgba(var(--accent-rgb),.7);transform-origin:left;animation:arm .3s linear both}
 @keyframes arm{from{transform:scaleX(0)}to{transform:scaleX(1);opacity:0}}
