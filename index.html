@@ -27,8 +27,10 @@
         <button type="button" class="nrow" data-go="chats" id="nv-chats"><span class="nr-ic" id="ic-chats"></span><span class="nr-name">Chats</span></button>
       </nav>
       <div class="side-label"><span id="projects-label">Projects</span></div>
+      <!-- a filter once the list is long (hub #16): typing narrows it, ↑ ↓ and Enter open one, Esc clears -->
+      <div class="side-find" id="side-find" hidden><span class="sf-ic" id="sf-ic" aria-hidden="true"></span><input id="pf-in" type="search" placeholder="Find a project" autocomplete="off" spellcheck="false" aria-label="Find a project" aria-controls="projects"><span class="sf-n" id="pf-n" aria-live="polite"></span></div>
       <nav class="projects" id="projects" aria-labelledby="projects-label"></nav>
-      <div class="side-foot"><button type="button" class="help gear" id="set-side" aria-label="Settings" title="Settings" aria-haspopup="true" aria-expanded="false"></button></div>
+      <div class="side-foot"><button type="button" class="gear" id="set-side" title="Settings" aria-haspopup="true" aria-expanded="false"><span class="gear-ic" id="set-side-ic"></span><span class="gear-t">Settings</span></button></div>
     </aside>
     <div class="side-scrim" id="side-scrim" hidden></div>
 
@@ -112,18 +114,18 @@
             <button type="button" role="tab" data-set="sounds" aria-selected="false">Sounds</button>
             <button type="button" role="tab" data-set="keys" aria-selected="false">Keyboard</button>
           </nav>
-          <div class="set-page" role="tabpanel" data-page="general"><h2>General</h2>
+          <div class="set-page" role="tabpanel" data-page="general"><header class="set-ph"><h2>General</h2><p class="set-intro">How the conversation shows what happens behind it.</p></header>
             <div class="set-row"><div class="set-l"><b id="hops-l">Show how messages travel</b><span>Inside a thread, a quiet line each time a message passes between the workspace, a project's coordinator and the thread. Off unless you turn it on.</span></div><button type="button" class="switch" id="hops-tog" role="switch" aria-checked="false" aria-labelledby="hops-l"><span class="th-track" aria-hidden="true"><span class="th-knob"></span></span></button></div>
           </div>
-          <div class="set-page" role="tabpanel" data-page="appearance" hidden><h2>Appearance</h2><p class="set-empty"><b>Nothing to set yet.</b> Appearance settings arrive here once the backend can keep them.</p></div>
-          <div class="set-page" role="tabpanel" data-page="routing" hidden><h2>Routing</h2><div class="set-live"></div></div>
-          <div class="set-page" role="tabpanel" data-page="rules" hidden><h2>Rules</h2><div class="set-live"></div></div>
-          <div class="set-page" role="tabpanel" data-page="worktrees" hidden><h2>Worktrees</h2><div class="set-live"></div></div>
-          <div class="set-page" role="tabpanel" data-page="night" hidden><h2>Night mode</h2><p class="set-empty"><b>Nothing to set yet.</b> Night mode settings arrive here once the backend can keep them.</p></div>
-          <div class="set-page" role="tabpanel" data-page="sounds" hidden><h2>Sounds</h2>
+          <div class="set-page" role="tabpanel" data-page="appearance" hidden><header class="set-ph"><h2>Appearance</h2><p class="set-intro">How XO looks on this device.</p></header><p class="set-empty"><b>Nothing to set yet.</b> Appearance settings arrive here once the backend can keep them.</p></div>
+          <div class="set-page" role="tabpanel" data-page="routing" hidden><header class="set-ph"><h2>Routing</h2></header><div class="set-live"></div></div>
+          <div class="set-page" role="tabpanel" data-page="rules" hidden><header class="set-ph"><h2>Rules</h2></header><div class="set-live"></div></div>
+          <div class="set-page" role="tabpanel" data-page="worktrees" hidden><header class="set-ph"><h2>Worktrees</h2></header><div class="set-live"></div></div>
+          <div class="set-page" role="tabpanel" data-page="night" hidden><header class="set-ph"><h2>Night mode</h2><p class="set-intro">What happens while you're away for the night.</p></header><p class="set-empty"><b>Nothing to set yet.</b> Night mode settings arrive here once the backend can keep them.</p></div>
+          <div class="set-page" role="tabpanel" data-page="sounds" hidden><header class="set-ph"><h2>Sounds</h2><p class="set-intro">Quiet sounds that confirm a decision.</p></header>
             <div class="set-row"><div class="set-l"><b id="sound-l">Soft sounds</b><span>On Allow, Send back and “That's everything”. Off unless you turn them on.</span></div><button type="button" class="switch" id="sound-tog" role="switch" aria-checked="false" aria-labelledby="sound-l"><span class="th-track" aria-hidden="true"><span class="th-knob"></span></span></button></div>
           </div>
-          <div class="set-page" role="tabpanel" data-page="keys" hidden><h2>Keyboard</h2><div id="set-keys-list"></div></div>
+          <div class="set-page" role="tabpanel" data-page="keys" hidden><header class="set-ph"><h2>Keyboard</h2></header><div id="set-keys-list"></div></div>
         </div>
       </section>
     </main>

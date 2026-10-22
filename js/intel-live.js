@@ -132,7 +132,7 @@ export function createLiveIntel({ world, PROJ, onChange, record }) {
         const sel = c.pinned && curId === m.id;
         const efforts = effortsOf(m, s);
         return `<div class="iq-row lv${sel ? " is-sel" : ""}" role="option" aria-selected="${sel}" data-lmodel="${esc(m.id)}">` +
-          `<span class="iq-mk" aria-hidden="true">${sel ? `<i class="iq-dot"></i>` : ""}</span><span class="iq-n">${esc(m.name)}</span><span class="iq-tr">${esc(m.description || "")}</span>` +
+          `<span class="iq-mk" aria-hidden="true">${sel ? `<i class="iq-dot"></i>` : ""}</span><span class="iq-n">${esc(m.name)}</span><span class="iq-tr" title="${esc(m.description || "")}">${esc(m.description || "")}</span>` +
           `<span class="iq-d">${efforts.length ? efforts.filter((e) => PIPS[e]).map((e) => `<button type="button" class="iq-pip${sel && c.effort === e ? " is-sel" : ""}" data-lpin="${esc(m.id)}|${esc(e)}" aria-label="${esc(m.name)}, ${esc(EFFORT_WORD[e] || e)}" title="${esc(EFFORT_WORD[e] || e)}"><span class="pd">${"<i></i>".repeat(PIPS[e])}</span></button>`).join("") : `<button type="button" class="iq-pip is-flat" data-lpin="${esc(m.id)}|" title="This model has no effort setting">Pick</button>`}</span></div>`;
       }).join("")}</div>`;
     }

@@ -65,6 +65,7 @@ applyTheme(THEME.get());
 // ── state ───────────────────────────────────────────────────────────────────
 const S = {
   view: "home",            // home | ws | p:<project> | t:<thread>
+  pfind: "", pfCur: 0,     // the sidebar's project filter (hub #16) and its highlighted row
   parent: {}, opener: {}, scroll: {},
   dockFold: {},
   showHops: (() => { try { return localStorage.getItem("cv-hops") === "1"; } catch { return false; } })(),
@@ -282,7 +283,18 @@ function sideRender(needs) {
   $("#nv-chats").classList.toggle("is-on", CH.isChats(S.view));
   for (const b of [$("#nv-home"), $("#nv-ws"), $("#nv-chats")]) b.toggleAttribute("aria-current", b.classList.contains("is-on"));
   const now = Date.now();
-  const items = projects().map((p) => {
+  // the project filter (hub #16): shown once the list is long; matches keep the ones needing you first
+  const all = projects();
+  const find = $("#side-find");
+  find.hidden = all.length <= FIND_AT && !S.pfind;
+  const q = (S.pfind || "").trim().toLowerCase();
+  const needN = (p) => (quiet ? 0 : mine.filter((x) => x.t.project === p.id).length);
+  const shown = q ? all.filter((p) => String(p.name || p.id).toLowerCase().includes(q)).sort((a, b) => (needN(b) > 0) - (needN(a) > 0)) : all;
+  if (S.pfCur >= shown.length) S.pfCur = shown.length - 1;
+  const pfn = q ? (shown.length ? `${shown.length} of ${all.length}` : "None") : "";
+  if ($("#pf-n").textContent !== pfn) $("#pf-n").textContent = pfn;
+  sideRender.shown = shown;
+  const items = shown.map((p, pi) => {
     const on = S.view === "p:" + p.id || convThread(S.view)?.project === p.id;
     const asks = quiet ? [] : mine.filter((x) => x.t.project === p.id);
     const lead = asks.find((x) => x.group !== "stopped" && x.risk !== "destructive") || asks[0];
@@ -295,14 +307,37 @@ function sideRender(needs) {
     const w = S.wash.get(p.id);
     const washing = w && w.until > now;
     return { key: p.id, html:
-      `<button type="button" class="prow${needsMe ? ` needs k-${kind}` : ""}${on ? " is-on" : ""}${washing ? " wash" : ""}" data-go="p:${esc(p.id)}" data-w="${washing ? w.n : 0}"${on ? ' aria-current="page"' : ""} aria-label="${esc(p.name)}${needsMe ? `. ${asks.length} need${asks.length === 1 ? "s" : ""} you: ${esc(label)}` : busy ? ". Working" : ""}">` +
+      `<button type="button" class="prow${needsMe ? ` needs k-${kind}` : ""}${on ? " is-on" : ""}${washing ? " wash" : ""}${q && pi === S.pfCur ? " is-cur" : ""}" data-go="p:${esc(p.id)}" data-w="${washing ? w.n : 0}"${on ? ' aria-current="page"' : ""} aria-label="${esc(p.name)}${needsMe ? `. ${asks.length} need${asks.length === 1 ? "s" : ""} you: ${esc(label)}` : busy ? ". Working" : ""}">` +
       `<span class="pr-ic" aria-hidden="true">${ICON.project}${busy ? `<i class="pr-busy"></i>` : ""}</span>` +
       `<span class="pr-main"><span class="pr-l1"><span class="pr-name">${esc(p.name)}</span>${needsMe ? `<span class="pr-w" aria-hidden="true"><i class="pr-d"></i>${asks.length}</span>` : ""}</span>` +
       (label ? `<span class="pr-t">${esc(label)}</span>` : "") + `</span></button>` };
   });
   sideRender.needs = new Map(projects().map((p) => [p.id, quiet ? 0 : mine.filter((x) => x.t.project === p.id).length]));
+  if (q && !items.length) items.push({ key: "pf-none", html: `<p class="pf-none">No project called “${esc(S.pfind.trim())}”.</p>` });
   reconcile($("#projects"), items, { quiet: !sideRender.ready });
   sideRender.ready = true;
+}
+const FIND_AT = 8;
+{
+  const inp = $("#pf-in");
+  const set = (v) => { S.pfind = v; S.pfCur = 0; sideRender(D.needItems()); };
+  inp.addEventListener("input", () => set(inp.value));
+  inp.addEventListener("keydown", (e) => {
+    const list = sideRender.shown || [];
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (inp.value) { inp.value = ""; set(""); } else inp.blur(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!list.length || !S.pfind) return;
+      S.pfCur = (Math.max(0, S.pfCur) + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length;
+      sideRender(D.needItems());
+      $("#projects .prow.is-cur")?.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    if (e.key === "Enter") {
+      const p = S.pfind ? list[Math.max(0, S.pfCur)] : null;
+      if (p) { e.preventDefault(); inp.value = ""; S.pfind = ""; S.pfCur = 0; go("p:" + p.id); }
+    }
+  });
 }
 
 // ── Home ────────────────────────────────────────────────────────────────────
@@ -2452,7 +2487,13 @@ $("#pb-menu").innerHTML = ICON.menu;
 $("#side-x").innerHTML = ICON.close;
 $("#pn-x").innerHTML = ICON.close;
 $("#set-x").innerHTML = ICON.close;
-$("#set-side").innerHTML = ICON.gear;
+$("#set-side-ic").innerHTML = ICON.gear;
+// Settings' rail: each section with its icon (hub #18/#19)
+{
+  const IC = { general: ICON.sliders, appearance: ICON.sun, routing: ICON.router, rules: ICON.rule, worktrees: ICON.branch, night: ICON.moon, sounds: ICON.sound, keys: ICON.key };
+  for (const b of $$("[data-set]")) b.innerHTML = `<span class="sn-ic" aria-hidden="true">${IC[b.dataset.set] || ""}</span><span class="sn-t">${esc(b.textContent)}</span>`;
+}
+$("#sf-ic").innerHTML = ICON.search;
 $("#set-phone").innerHTML = ICON.gear;
 $("#sound-tog .th-knob").innerHTML = ICON.sound;
 for (const x of $$(".sheet [data-close]")) x.innerHTML = ICON.close;
