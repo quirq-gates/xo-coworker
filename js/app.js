@@ -907,6 +907,8 @@ function topRender(needs) {
   const t = convThread(v);
   const top = $("#top");
   top.dataset.kind = v === "ws" ? "ws" : t ? "thread" : "project";
+  // a thin state line along the thread's header: amber needs you, blue working, green done, red stopped
+  top.dataset.state = !t ? "" : needs.some((n) => n.t.id === t.id && n.admitted) ? "need" : t.state === "failed" ? "stop" : isBusy(t) ? "busy" : t.state === "done" || t.state === "resolved" ? "done" : "";
   const back = $("#top-back");
   back.hidden = !t;
   if (CH.isChats(v)) {

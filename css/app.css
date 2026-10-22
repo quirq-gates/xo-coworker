@@ -1938,3 +1938,43 @@ body.viewer-open .tdock{display:none}
   body.viewer-open .uxc{display:none}
 }
 
+/* ── Light, not costume (plan Part C; ideas from launchpad-demo, toned down) ──────────────────
+   The sci-fi is in the light and the type, never in costume: a faint atmosphere behind Home and
+   Settings, a thin state-coloured line along the top of the decision card and a thread's header,
+   deeper "instrument" surfaces for code, and mono with tabular digits for counts and ids.
+   Nothing glows; colour still means status only; the one moving line stops under reduced motion. */
+:root{
+  --atmos:
+    radial-gradient(1100px 520px at 10% -12%,rgba(var(--accent-rgb),.07),transparent 62%),
+    radial-gradient(900px 600px at 96% -16%,color-mix(in srgb,var(--info) 9%,transparent),transparent 62%);
+  --term-bg:#111111;
+}
+:root[data-theme="light"]{
+  --atmos:
+    radial-gradient(1100px 520px at 10% -12%,rgba(var(--accent-rgb),.045),transparent 62%),
+    radial-gradient(900px 600px at 96% -16%,color-mix(in srgb,var(--info) 5%,transparent),transparent 62%);
+  --term-bg:var(--bg-2);
+}
+.home{background:var(--atmos)}
+.settings{background:var(--atmos),var(--canvas)}
+
+/* the state line: a decision card says "needs you" (amber) or "destructive / stopped" (red) */
+.card::before{content:"";position:absolute;z-index:2;left:22px;right:22px;top:0;height:2px;border-radius:0 0 2px 2px;pointer-events:none;
+  background:linear-gradient(90deg,transparent,var(--sl,var(--warn)) 16%,var(--sl,var(--warn)) 84%,transparent);opacity:.75}
+.card.r-destructive,.card.r-stopped{--sl:var(--err-ink)}
+.card.r-done::before,.card.r-vig::before{display:none}
+
+/* …and a thread's header: amber needs you, blue working (one slow sweep), green done, red stopped */
+.top[data-kind="thread"]::before{content:"";position:absolute;top:0;left:var(--hg);right:calc(var(--hg) + var(--rp));height:2px;border-radius:0 0 2px 2px;pointer-events:none;opacity:0;transition:opacity var(--dur-slow)}
+.top[data-state="need"]::before{opacity:.8;background:linear-gradient(90deg,transparent,var(--warn) 20%,var(--warn) 80%,transparent)}
+.top[data-state="stop"]::before{opacity:.8;background:linear-gradient(90deg,transparent,var(--err-ink) 20%,var(--err-ink) 80%,transparent)}
+.top[data-state="done"]::before{opacity:.55;background:linear-gradient(90deg,transparent,var(--accent-fill) 20%,var(--accent-fill) 80%,transparent)}
+.top[data-state="busy"]::before{opacity:.8;background:linear-gradient(90deg,transparent 0%,color-mix(in srgb,var(--info) 35%,transparent) 30%,var(--info) 50%,color-mix(in srgb,var(--info) 35%,transparent) 70%,transparent 100%) 0 0/50% 100% no-repeat;animation:sl-sweep 2.8s var(--ease) infinite}
+@keyframes sl-sweep{from{background-position:-100% 0}to{background-position:200% 0}}
+@media (prefers-reduced-motion:reduce){.top[data-state="busy"]::before{animation:none;background:linear-gradient(90deg,transparent,var(--info) 20%,var(--info) 80%,transparent)}}
+
+/* instrument surfaces and type */
+.md-code{background:var(--term-bg)}
+.vw-code{background:var(--term-bg)}
+.ck-n,.pn-count,.tc-st,.nr-n,.pr-w{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.settings .set-top{background:transparent}

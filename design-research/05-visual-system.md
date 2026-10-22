@@ -214,5 +214,6 @@ The code inventory found these gaps between stated intent and shipped CSS/JS. Th
 6. **The composer's focus indicator is weak**: `outline: none`, and the border changes `#2E2E2E → #3E3E3E` (about 1.7:1 against the canvas).
 7. **"Nothing bounces"** vs the overshooting `--spring` on stamps and the lock; **"nothing below 10.5px"** vs 9–10 px glyphs in the checklist.
 8. ~~**The tab title reads "◆ N · Converged"**, the concept's name.~~ Fixed 2026-10-21: it reads "◆ N · XO Space".
+9. **Light, not costume (2026-10-22, if1 rework).** Ideas taken, toned down, from `launchpad-demo`. The canvas behind Home and Settings has a faint atmosphere (`--atmos`: green top-left, blue top-right, at 5–9 %). A 2 px state line runs along the top of the decision card and a thread's header: amber needs you, blue working, green done, red stopped. Blue is the only line that moves, as one slow sweep, and it stops under reduced motion. Code sits on a deeper `--term-bg`, and code colours are `--code-*` tokens mixed from the palette's own hues. Counts and ids are mono with tabular digits. Still nothing glows, and colour still means status, except inside code.
 
 See [10-open-questions.md](10-open-questions.md) for which of these are worth fixing.
