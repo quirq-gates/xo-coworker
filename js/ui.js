@@ -1,6 +1,5 @@
-// Converged · small shared helpers: icons, a keyed DOM reconciler, time words (with a display
-// clock the evening → morning demo can shift), smooth disclosure, reduced motion and the optional
-// soft sounds (off by default).
+// Converged · small shared helpers: icons, a keyed DOM reconciler, time words, smooth disclosure,
+// reduced motion and the optional soft sounds (off by default).
 import { esc } from "./world.js";
 
 const I = (d, extra = "") =>
@@ -25,6 +24,7 @@ export const ICON = {
   chevron: I('<path d="M6 9l6 6 6-6"/>'),
   list: I('<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>'),
   lock: I('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
+  stop: I('<rect x="7" y="7" width="10" height="10" rx="2.2" fill="currentColor" stroke="none"/>'),
   play: I('<path d="M7 5v14l11-7z"/>'),
   sound: I('<path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16.5 9a4 4 0 0 1 0 6"/>'),
   plus: I('<path d="M12 5v14M5 12h14"/>', ' stroke-width="2"'),
@@ -33,12 +33,15 @@ export const ICON = {
   clock: I('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
   menu: I('<path d="M4 7h16M4 12h16M4 17h10"/>'),
   eye: I('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/>'),
+  clip: I('<path d="M20.5 11.5 12.6 19.4a5 5 0 0 1-7.1-7.1l8.2-8.2a3.3 3.3 0 0 1 4.7 4.7l-8.2 8.2a1.7 1.7 0 0 1-2.4-2.4l7.5-7.5"/>'),
   doc: I('<path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20z"/><path d="M14 3.5V8h4M9.5 12h6M9.5 15.5h6"/>'),
+  image: I('<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m20.5 15.5-4.8-4.8L6.5 19.5"/>'),
   folder: I('<path d="M3.5 7a1.5 1.5 0 0 1 1.5-1.5h4l2 2h8A1.5 1.5 0 0 1 20.5 9v9a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/>'),
   moon: I('<path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10z"/>'),
   spark: I('<path d="M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4M6 6l2.6 2.6M15.4 15.4 18 18M18 6l-2.6 2.6M8.6 15.4 6 18"/>'),
   bolt: I('<path d="M13 3 5.5 13.5H12L11 21l7.5-10.5H12z"/>'),
   warm: I('<path d="M12 21a6 6 0 0 0 6-6c0-3.5-2.5-5.5-3.5-8.5-.6 2-1.8 3-3 3.5C10 8 9.5 6 10 3.5 7.5 5.5 6 9 6 15a6 6 0 0 0 6 6z"/>'),
+  gear: I('<path d="M10.4 3.6h3.2l.5 2.4 1.7 1 2.3-.8 1.6 2.8-1.8 1.6v2l1.8 1.6-1.6 2.8-2.3-.8-1.7 1-.5 2.4h-3.2l-.5-2.4-1.7-1-2.3.8-1.6-2.8L6.1 13v-2L4.3 9.4l1.6-2.8 2.3.8 1.7-1z"/><circle cx="12" cy="12" r="2.6"/>'),
   sliders: I('<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>'),
   gem: I('<path d="M6.5 4h11l3.5 5-9 11L3 9z"/><path d="M3 9h18M9.5 4 8 9l4 11 4-11-1.5-5"/>'),
   ripe: I('<path d="M12 7c-4 0-7 2.8-7 7s3 7 7 7 7-2.8 7-7-3-7-7-7z"/><path d="M12 7c0-2 1-3.5 3-4"/>'),
@@ -46,7 +49,6 @@ export const ICON = {
   pause: I('<path d="M9 6v12M15 6v12"/>', ' stroke-width="2"'),
   hourglass: I('<path d="M7 3.5h10M7 20.5h10M8 3.5c0 5 8 5 8 8.5s-8 3.5-8 8.5M16 3.5c0 2.5-2 4-4 5"/>'),
   sun: I('<circle cx="12" cy="12" r="4"/><path d="M12 2.8v2M12 19.2v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2.8 12h2M19.2 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
-  seed: I('<path d="M12 20v-7"/><path d="M12 13c0-4 2.6-6.6 7-7 0 4.4-2.8 7-7 7z"/><path d="M12 15.5C12 12.6 10 10.6 6 10.4c0 3.2 2 5.1 6 5.1z"/>'),
   replay: I('<path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4.5h4.5"/><path d="M10.5 9.2v5.6l4.6-2.8z" fill="currentColor" stroke="none"/>'),
   rule: I('<path d="M5 5h14M5 10h14M5 15h8"/><path d="M16 15.5l1.8 1.8L21 14"/>'),
   shield: I('<path d="M12 3.5 19 6v5.6c0 4.2-2.9 7.5-7 8.9-4.1-1.4-7-4.7-7-8.9V6z"/><path d="M9 12l2.2 2.2L15.5 10"/>'),
@@ -180,15 +182,11 @@ export const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 export const RM = matchMedia("(prefers-reduced-motion: reduce)");
 export const wait = (ms) => new Promise((r) => setTimeout(r, RM.matches ? 0 : ms));
 
-// The evening → morning demo shifts every clock the person sees (never the world's own timestamps).
-let SHIFT = 0;
-export function setClockShift(ms) { SHIFT = ms; }
-export const shifted = (ms = Date.now()) => ms + SHIFT;
 export function clock(ms) {
-  return new Date(ms + SHIFT).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 export function dayOf(ms, now = Date.now()) {
-  const d = new Date(ms + SHIFT), t = new Date(now + SHIFT), y = new Date(now + SHIFT - 86400000);
+  const d = new Date(ms), t = new Date(now), y = new Date(now - 86400000);
   if (d.toDateString() === t.toDateString()) return "Today";
   if (d.toDateString() === y.toDateString()) return "Yesterday";
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
@@ -200,7 +198,7 @@ export function short(ms, now = Date.now()) {
   if (m < 60) return `${m}m`;
   const h = Math.round(m / 60);
   if (h < 24) return `${h}h`;
-  return new Date(ms + SHIFT).toLocaleDateString(undefined, { weekday: "short" });
+  return new Date(ms).toLocaleDateString(undefined, { weekday: "short" });
 }
 export function elapsed(secs) {
   if (secs < 60) return `${secs}s`;

@@ -6,32 +6,31 @@
 // Pacing is invisible: asks are ranked, small ones that block nobody wait
 // quietly ("can wait", with the honest reason), destructive and stopped asks
 // are never held, only high-leverage arrivals speak up, a break after ~25 min
-// of deciding. One end-of-day moment ("Before you go": queue tonight's work,
-// then seal) and a morning recap on the first visit. Found while working (≤2).
-// A plain "3rd time · make it a rule?" inside a decision. Stop while anything
-// runs. Intelligence per session in the composer. Light and dark.
+// of deciding. Stop while anything runs. Intelligence per session in the
+// composer. Light and dark.
 import { createWorld, esc, WAITING } from "./world.js";
-import { mountMode } from "./mode.js";
-import { renderMarkdown } from "./markdown.js";
+import { renderMarkdown, renderInline } from "./markdown.js";
 import * as Kit from "./kit.js";
+import * as K from "./keys.js";
 import { createDecisions } from "./decide.js";
 import { createPacing } from "./pacing.js";
-import { createRules } from "./rules.js";
-import { createFinds } from "./finds.js";
-import { createNight } from "./night.js";
 import { createIntel } from "./intel.js";
-import { EFFORT, HELD_SEED, estLine, evidenceFor } from "./content.js";
-import { ICON, XO, NEXT_GLYPH, $, $$, RM, clock, dayOf, short, elapsed, reconcile, sound, wait, dial, morph, expand, shifted } from "./ui.js";
-import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine } from "./timeline.js";
+import { EFFORT, estLine, evidenceFor } from "./content.js";
+import { ICON, XO, NEXT_GLYPH, $, $$, RM, clock, dayOf, short, elapsed, reconcile, sound, wait, dial, morph, expand } from "./ui.js";
+import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText, hopLine, sharedFileRoute, relayedInto } from "./timeline.js";
+import { turnHtml } from "./turnview.js";
+import { itemParts } from "./review.js";
+import { runsStripHtml, runsListHtml, runViewHtml } from "./runsview.js";
+import { createSettings } from "./settings.js";
+import { createChats } from "./chats.js";
+import { createViewer } from "./viewer.js";
+import { createTray, fmtSize, kindOf, typeWord, isLargePaste, pasteLabel, uploadErrorText, FINAL, MAX_FILES } from "./attach.js";
+import { uploadAttachment, attachmentUrl } from "./api.js";
 
 const world = createWorld();
-// Demo-only features (seeded content, the night, rules, finds, Stop) never run against the real backend.
-const DEMO = world.mode === "demo";
-mountMode(world);
 
 const params = new URL(location.href).searchParams;
-const T0 = Date.now();
-const PROJ = (id) => (id === "workspace" ? "Workspace" : world.project(id)?.name || id);
+const PROJ = (id) => (id === "workspace" ? "Workspace" : id === "@account" ? "Your account" : id === "@chats" ? "Chats" : world.project(id)?.name || id);
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
@@ -41,8 +40,7 @@ const NUM = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight
 const num = (n) => NUM[n] || String(n);
 const low = (n) => num(n).toLowerCase();
 const plural = (n, w) => `${w}${n === 1 ? "" : "s"}`;
-// Drafts are kept per mode, so demo text never lands in a live composer (P3-4).
-const DRAFTS = DEMO ? "cv-drafts" : "cv-drafts:live";
+const DRAFTS = "cv-drafts:live";
 const STOP_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2.2" fill="currentColor"/></svg>`;
 
 // ── theme: dark by default, a slide toggle in the sidebar (#28) ────────────
@@ -58,74 +56,45 @@ applyTheme(THEME.get());
 // ── state ───────────────────────────────────────────────────────────────────
 const S = {
   view: "home",            // home | ws | p:<project> | t:<thread>
+  pfind: "", pfCur: 0,     // the sidebar's project filter (hub #16) and its highlighted row
   parent: {}, opener: {}, scroll: {},
-  local: {}, alias: new Map(), localThread: new Map(),
+  dockFold: {},
+  showHops: (() => { try { return localStorage.getItem("cv-hops") === "1"; } catch { return false; } })(),
+  tbOpen: {},              // storm blocks opened by the person (by block id, or row:<call id>)
+  stops: new Map(),        // live Stops by session: waiting out their Undo, or on their way
+  tEdit: null,             // a thread header field being edited: {tid, field: "title"|"label"}
+  recording: null, keyErr: null,  // Settings › Keyboard: the action waiting for a new key, and why the last one was refused            // asks folded away in their thread so you can read it first (by ask key)
+  local: {}, alias: new Map(),
   drafts: store.get(DRAFTS, {}),
   later: new Set(),
   pin: null,
   wash: new Map(),
   herald: null,
   ckOpen: {}, ckSeen: {}, ckFresh: null,
-  handledOpen: false, eodOpen: false, rulesOpen: false,
-  typing: {}, desc: {}, stopped: {},
+  handledOpen: false,
+  desc: {},
   seen: null,
   allFilter: "all", allDone: false,
-  morningOpen: false,
   n: 0,
 };
 const waitSince = new Map();
-const absorbing = new Set();
 const live = $("#live");
 function announce(text) { live.textContent = ""; setTimeout(() => { live.textContent = text; }, 40); }
 
-// ── demo world seeding (demo only; live reads what's there) ────────────────
-if (world.mode === "demo") {
-  const th = (re) => world.state.threads.find((t) => re.test(t.title));
-  const now = Date.now();
-  const since = [[/dark mode contrast/i, 70 * 1000], [/retry soft declines/i, 42 * 60000], [/interview notes/i, (3 * 60 + 12) * 60000], [/nightly job/i, 2 * 3600000], [/backfill/i, 64 * 60000]];
-  for (const [re, ms] of since) { const t = th(re); if (t) waitSince.set(t.id, now - ms); }
-  for (const h of HELD_SEED) {
-    const t = th(h.thread);
-    if (t && t.state === "working") t.asks = [{ id: `held_${t.id}`, ...h.ask }];
-  }
-  // The third `npm test` this week: the decision offers a rule.
-  const off = th(/Offline mode/i);
-  if (off) {
-    off.state = "needs_approval";
-    off.asks = [{ id: "seed_npmtest", kind: "permission", title: "Run: npm test -- mobile-app", detail: "Read-only test run in the project folder.", risk: "routine" }];
-    off.needsYou = off.asks[0].title;
-    waitSince.set(off.id, now - 3 * 60000);
-  }
-  // ?many=1 : a project with many threads, to show the Now shelf never grows
-  if (params.has("many")) {
-    const mk = (title, state, steps, done, i) => ({
-      id: `many_${i}`, project: "billing-api", title, state, headline: "", branch: `xo/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 22)}`,
-      happened: state === "done" ? "Done. All tests pass." : "Reading the code around it.", needsYou: "",
-      createdAt: now - (2 + i * 7) * 3600000, lastAt: now - (1 + i * 5) * 3600000,
-      checklist: { items: steps.map((s, k) => ({ text: s, state: k < done ? "done" : k === done && state === "working" ? "doing" : "todo" })), total: steps.length, done, doing: state === "working" ? 1 : 0 },
-      messages: [{ id: `m_many_${i}`, at: now - 7200000, who: "you", text: title + "." }], asks: [], _steps: steps,
-    });
-    const done = ["Webhook signature check", "Idempotency keys on refunds", "Coupon rounding", "Tax ID validation", "Currency display for JPY", "Invoice PDF fonts", "Proration preview endpoint", "Retry jitter tuning", "Remove legacy v1 routes", "Stripe event dedupe", "Late-fee policy flag", "Card brand icons"];
-    done.forEach((d, i) => world.state.threads.push(mk(d, "done", ["Read", "Change", "Test"], 3, i)));
-    world.state.threads.push(mk("Dunning email templates for failed renewals", "working", ["Draft", "Wire hooks", "Tests", "Preview"], 1, 20));
-    world.state.threads.push(mk("Annual plan discounts", "working", ["Model", "Migrate", "Tests"], 2, 21));
-    world.state.threads.push(mk("Refund reasons report", "working", ["Query", "Chart", "Export"], 0, 22));
-  }
-}
-
 // ── the parts ───────────────────────────────────────────────────────────────
 const P = createPacing({ params });
-const R = createRules({
-  PROJ,
-  onChange: () => schedule(),
-  onEvent: (e) => { if (e.kind === "rule") { heraldShow({ kind: "rule", text: "Rule added", sub: "it answers these from now on" }, 4600); setTimeout(absorbSweep, 3400); } },
-});
-const FV = createFinds({ world, params, onArrive: (f) => { announce(`Found while working: ${f.title}.`); schedule(); } });
 const D = createDecisions({
-  world, P, rules: R, PROJ, announce, waitSince, absorbing,
+  world, P, PROJ, announce, waitSince,
   render: () => schedule(),
   later: S.later,
-  onOpenThread: (tid) => go("t:" + tid, { keepPanel: true }),
+  onOpenThread: (tid) => {
+    // an item hosted by a chat (no thread) opens that conversation; one hosted by the account has no page yet
+    const h = (world.state.hosts || []).find((x) => x.id === tid);
+    if (h) { if (h.chatId) go(convOfChat(h.project), { keepPanel: true }); else if (h.plainSession) go("c:" + h.plainSession); else heraldShow({ kind: "calm", text: "It isn't tied to a conversation", sub: h.title }, 3600); return; }
+    go("t:" + tid, { keepPanel: true });
+  },
+  // a decision refused after its window: the honest correction replaces "All clear"
+  onNotSent: (title, why) => { setTimeout(() => heraldShow({ kind: "stopped", text: "Not sent", sub: `${String(title).replace(/`/g, "").replace(/[.?!]$/, "")} · ${why}`, force: true }, 7000), RM.matches ? 0 : 950); },
   onAllClear: (summary) => { setTimeout(() => heraldShow({ kind: "clear", text: "All clear", sub: summary }, 4600), RM.matches ? 0 : 900); },
   onUndone: (key) => { if (S.view === "home") { S.pin = key; S.pinAnim = "undo"; } },
   onBreak: (left) => heraldShow({ kind: "calm", text: "Taking a break", sub: `${left} wait safely` }, 5200),
@@ -134,74 +103,66 @@ const D = createDecisions({
     if (part.ask.stopByYou && part.choice && part.choice.option === "Stop here") setTimeout(() => { world.act.resolve(part.t.id).catch(() => {}); }, 1600);
   },
 });
-const NIGHT = createNight({ world, D, params, extra: () => Object.values(S.local) });
 const IQ = createIntel({
-  world, PROJ, params,
+  world, PROJ,
   onChange: (o) => { chipRender(o && o.fade); },
   record: (session, rec) => recordLine(session, rec),
 });
 
+const CH = createChats({
+  world, announce, heraldShow: (...a) => heraldShow(...a), go: (...a) => go(...a), schedule: () => schedule(),
+  view: () => S.view,
+  // a new chat that was refused: your words go back into an empty composer on the Chats page
+  restore: (text, { force = false } = {}) => {
+    if (force && S.view !== "chats") go("chats");
+    if (S.view !== "chats") return false;
+    const now = say.value.trim();
+    if (now && !force) return false;
+    say.value = now ? `${text}\n\n${now}` : text;
+    growSay(); saveDraft(); updateComposer(); say.focus();
+    return true;
+  },
+});
+world.ui = { tbOpen: S.tbOpen }; // turn blocks open or folded, shared with the Chats view
+const VW = createViewer({ announce }); // a shared file beside the conversation (if1 #2)
+
 // ── world helpers ───────────────────────────────────────────────────────────
 const projects = () => world.state.projects.filter((p) => p.id !== "workspace");
+const RUNNING = new Set(["queued", "starting", "running", "stopping"]); // a session on a turn (storm.js BUSY)
 const threadsOf = (pid) => world.state.threads.filter((t) => t.project === pid && t.state !== "resolved");
 const convThread = (v) => (v && v.startsWith("t:") ? world.thread(v.slice(2)) : null);
 const convProject = (v) => (v === "ws" || v === "home" ? "workspace" : v.startsWith("p:") ? v.slice(2) : convThread(v)?.project);
 const sessionOf = (v) => (v === "home" ? "ws" : v);
 const askTitle = (n) => {
+  if (n.ask.live) return renderInline(n.ask.title || "", true); // the server's words; `code` stays code
   const cmd = Kit.commandOf(n.ask);
   if (cmd) return `Run <code>${esc(cmd)}</code>`;
   if (n.group === "stopped") return esc(n.t.title);
   return esc(n.risk === "destructive" ? n.ask.title.replace(/:\s.*$/, "") : n.ask.title);
 };
 const askShort = (n) => {
+  if (n.ask.live) return plainText(n.ask.title || "");
   const cmd = Kit.commandOf(n.ask);
   if (cmd) return `Run ${cmd}`;
   if (n.group === "stopped") return "Stopped";
   if (n.risk === "destructive") return n.ask.title.replace(/:\s.*$/, "");
   return n.ask.title;
 };
-const STATE_WORD = { working: "Working", needs_reply: "Needs you", needs_approval: "Needs you", done: "Done", failed: "Stopped", resolved: "Resolved" };
-// Live: "Working" only while its agent really works (detail `busy`, or our reply awaits an answer).
-// A working thread whose session sits idle reads "Idle" (P1-8). Demo threads have no `busy`.
+const STATE_WORD = { working: "Working", needs_reply: "Needs you", needs_approval: "Needs you", paused: "Paused", done: "Done", failed: "Stopped", resolved: "Resolved" };
+// "Working" only while its agent really works (detail `busy`, or our reply awaits an answer).
+// A working thread whose session sits idle reads "Idle" (P1-8).
 const isBusy = (t) => t.busy === true || (t.state === "working" && t.busy !== false);
 const glyphOf = (t) => (t.state === "working" && t.busy === false ? "idle" : t.state);
 const wordOf = (t) => (glyphOf(t) === "idle" ? "Idle" : STATE_WORD[t.state]);
-const SORT_STATE = { needs_approval: 0, needs_reply: 0, failed: 1, working: 2, done: 3, resolved: 4 };
+const SORT_STATE = { needs_approval: 0, needs_reply: 0, paused: 0, failed: 1, working: 2, done: 3, resolved: 4 };
 const doneToday = () => world.state.threads.filter((t) => t.state === "done" && new Date(t.lastAt).toDateString() === new Date().toDateString());
-const sealed = () => NIGHT.phase === "night";
-const ord = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
-
-// ── rules answer matching asks (demo acts; live would be server-side) ──────
-function absorbSweep() {
-  if (world.mode !== "demo") return;
-  for (const t of world.state.threads) {
-    for (const a of t.asks || []) {
-      const key = Kit.askKey(t, a);
-      if (absorbing.has(key) || D.pendingKey(key)) continue;
-      const cover = R.coverFor(t, a);
-      if (!cover) continue;
-      absorbing.add(key);
-      setTimeout(async () => {
-        try {
-          if (WAITING(t.state)) await world.act.decide(a.id, "allow", "");
-          else { t.asks = t.asks.filter((x) => x !== a); t.needsYou = ""; }
-        } catch { absorbing.delete(key); return; }
-        R.absorbed(t, a, cover);
-        heraldShow({ kind: "rule", text: `Your rule answered: ${Kit.commandOf(a) || a.title}`, sub: PROJ(t.project) }, 5200);
-        absorbing.delete(key);
-        schedule();
-      }, RM.matches ? 300 : 900);
-    }
-  }
-  schedule();
-}
 
 // ── events: a calm labelled line, never the composer, never a quiet row ────
 world.onEvent((e) => {
   if (e.kind === "message") {
-    // live: the coordinator answered something you asked, and you're looking elsewhere: one calm line
+    // the coordinator answered something you asked, and you're looking elsewhere: one calm line
     const conv = e.project === "workspace" ? "ws" : "p:" + e.project;
-    if (e.answered && S.view !== conv && !sealed()) heraldShow({ kind: "reply", text: e.project === "workspace" ? "The coordinator replied" : `${PROJ(e.project)} coordinator replied`, sub: short1(e.text), open: conv }, 7000);
+    if (e.answered && S.view !== conv) heraldShow({ kind: "reply", text: e.project === "workspace" ? "The coordinator replied" : `${PROJ(e.project)} coordinator replied`, sub: short1(e.text), open: conv }, 7000);
     if (e.answered) announce(`${e.project === "workspace" ? "The coordinator" : PROJ(e.project) + " coordinator"} replied: ${e.text}`);
     schedule();
     return;
@@ -210,8 +171,7 @@ world.onEvent((e) => {
   const pid = e.project;
   if (e.kind === "ask" && t && !waitSince.has(t.id)) waitSince.set(t.id, Date.now());
   if (e.kind === "resumed" && t) waitSince.delete(t.id);
-  if (e.kind === "ask") setTimeout(absorbSweep, 50);
-  if (!pid || pid === "workspace" || sealed()) return;
+  if (!pid || pid === "workspace") return;
   if (e.kind === "done" && t) heraldShow({ kind: "done", text: `${t.title} finished`, sub: PROJ(pid), open: "t:" + t.id }, 5200);
   else if (e.kind === "state" && t && t.state === "failed") heraldShow({ kind: "stopped", text: `${t.title} stopped`, sub: PROJ(pid), open: "t:" + t.id }, 5200);
 });
@@ -232,42 +192,82 @@ function pings(needs) {
 // ── sidebar: button-like rows; text only when a project needs you (#27) ────
 function sideRender(needs) {
   const mine = needs.filter((x) => x.admitted && !x.later);
-  const quiet = sealed();
-  const n = quiet ? 0 : mine.length;
+  const n = mine.length;
   const hn = $("#home-n");
-  const hnHtml = quiet ? `<span class="nr-seal">${ICON.moon}</span>` : n ? `<span class="nv-dot" aria-hidden="true"></span>${n}` : "";
+  const hnHtml = n ? `<span class="nv-dot" aria-hidden="true"></span>${n}` : "";
   if (hn._h !== hnHtml) { hn.innerHTML = hnHtml; hn._h = hnHtml; }
-  $("#nv-home").setAttribute("aria-label", quiet ? "Home, sealed for the night" : n ? `Home, ${n} need you` : "Home, nothing needs you");
+  $("#nv-home").setAttribute("aria-label", n ? `Home, ${n} need you` : "Home, nothing needs you");
   $("#nv-home").classList.toggle("is-on", S.view === "home");
   $("#nv-ws").classList.toggle("is-on", S.view === "ws");
-  for (const b of [$("#nv-home"), $("#nv-ws")]) b.toggleAttribute("aria-current", b.classList.contains("is-on"));
+  $("#nv-chats").classList.toggle("is-on", CH.isChats(S.view));
+  for (const b of [$("#nv-home"), $("#nv-ws"), $("#nv-chats")]) b.toggleAttribute("aria-current", b.classList.contains("is-on"));
   const now = Date.now();
-  const items = projects().map((p) => {
+  // the project filter (hub #16): shown once the list is long; matches keep the ones needing you first
+  const all = projects();
+  const find = $("#side-find");
+  find.hidden = all.length <= FIND_AT && !S.pfind;
+  const q = (S.pfind || "").trim().toLowerCase();
+  const needN = (p) => mine.filter((x) => x.t.project === p.id).length;
+  const shown = q ? all.filter((p) => String(p.name || p.id).toLowerCase().includes(q)).sort((a, b) => (needN(b) > 0) - (needN(a) > 0)) : all;
+  if (S.pfCur >= shown.length) S.pfCur = shown.length - 1;
+  const pfn = q ? (shown.length ? `${shown.length} of ${all.length}` : "None") : "";
+  if ($("#pf-n").textContent !== pfn) $("#pf-n").textContent = pfn;
+  sideRender.shown = shown;
+  const items = shown.map((p, pi) => {
     const on = S.view === "p:" + p.id || convThread(S.view)?.project === p.id;
-    const asks = quiet ? [] : mine.filter((x) => x.t.project === p.id);
+    const asks = mine.filter((x) => x.t.project === p.id);
     const lead = asks.find((x) => x.group !== "stopped" && x.risk !== "destructive") || asks[0];
-    const busy = threadsOf(p.id).some(isBusy);
+    // every thread with work running counts, a resolved one too (its turn or sub-agents can outlive the
+    // resolve), and so does the project's coordinator while it's on a turn
+    const nBusy = world.state.threads.filter((t) => t.project === p.id && (t.state === "resolved" ? t.busy === true : isBusy(t))).length;
+    const coordBusy = !!p.chatId && Object.values(world.state.sessions || {}).some((x) => x.chat_id === p.chatId && x.role === "project-coordinator" && RUNNING.has(x.state));
+    const busy = nBusy > 0 || coordBusy;
     const needsMe = asks.length > 0;
-    const label = needsMe ? askShort(lead) : "";
+    // hub #31: a project at work reads blue at a glance; what needs you (amber, red) still wins the row
+    const working = busy && !needsMe;
+    const label = needsMe ? askShort(lead) : working ? (nBusy > 1 ? `${nBusy} threads working` : nBusy ? "Working" : "Coordinator working") : "";
     const kind = needsMe ? (lead.risk === "destructive" || lead.group === "stopped" ? "red" : "amber") : "";
     const was = sideRender.needs?.get(p.id) || 0;
     if (asks.length > was && sideRender.ready && !RM.matches) S.wash.set(p.id, { n: (S.wash.get(p.id)?.n || 0) + 1, until: now + 2600 });
     const w = S.wash.get(p.id);
     const washing = w && w.until > now;
     return { key: p.id, html:
-      `<button type="button" class="prow${needsMe ? ` needs k-${kind}` : ""}${on ? " is-on" : ""}${washing ? " wash" : ""}" data-go="p:${esc(p.id)}" data-w="${washing ? w.n : 0}"${on ? ' aria-current="page"' : ""} aria-label="${esc(p.name)}${needsMe ? `. ${asks.length} need${asks.length === 1 ? "s" : ""} you: ${esc(label)}` : busy ? ". Working" : ""}">` +
-      `<span class="pr-ic" aria-hidden="true">${esc(p.name.charAt(0).toUpperCase())}${busy ? `<i class="pr-busy"></i>` : ""}</span>` +
+      `<button type="button" class="prow${needsMe ? ` needs k-${kind}` : working ? " busy" : ""}${on ? " is-on" : ""}${washing ? " wash" : ""}${q && pi === S.pfCur ? " is-cur" : ""}" data-go="p:${esc(p.id)}" data-w="${washing ? w.n : 0}"${on ? ' aria-current="page"' : ""} aria-label="${esc(p.name)}${needsMe ? `. ${asks.length} need${asks.length === 1 ? "s" : ""} you: ${esc(label)}` : busy ? ". Working" : ""}">` +
+      `<span class="pr-ic" aria-hidden="true">${ICON.project}${busy && needsMe ? `<i class="pr-busy"></i>` : ""}</span>` +
       `<span class="pr-main"><span class="pr-l1"><span class="pr-name">${esc(p.name)}</span>${needsMe ? `<span class="pr-w" aria-hidden="true"><i class="pr-d"></i>${asks.length}</span>` : ""}</span>` +
       (label ? `<span class="pr-t">${esc(label)}</span>` : "") + `</span></button>` };
   });
-  sideRender.needs = new Map(projects().map((p) => [p.id, quiet ? 0 : mine.filter((x) => x.t.project === p.id).length]));
+  sideRender.needs = new Map(projects().map((p) => [p.id, mine.filter((x) => x.t.project === p.id).length]));
+  if (q && !items.length) items.push({ key: "pf-none", html: `<p class="pf-none">No project called “${esc(S.pfind.trim())}”.</p>` });
   reconcile($("#projects"), items, { quiet: !sideRender.ready });
   sideRender.ready = true;
+}
+const FIND_AT = 8;
+{
+  const inp = $("#pf-in");
+  const set = (v) => { S.pfind = v; S.pfCur = 0; sideRender(D.needItems()); };
+  inp.addEventListener("input", () => set(inp.value));
+  inp.addEventListener("keydown", (e) => {
+    const list = sideRender.shown || [];
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (inp.value) { inp.value = ""; set(""); } else inp.blur(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!list.length || !S.pfind) return;
+      S.pfCur = (Math.max(0, S.pfCur) + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length;
+      sideRender(D.needItems());
+      $("#projects .prow.is-cur")?.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    if (e.key === "Enter") {
+      const p = S.pfind ? list[Math.max(0, S.pfCur)] : null;
+      if (p) { e.preventDefault(); inp.value = ""; S.pfind = ""; S.pfCur = 0; go("p:" + p.id); }
+    }
+  });
 }
 
 // ── Home ────────────────────────────────────────────────────────────────────
 function greeting() {
-  const h = new Date(shifted()).getHours();
+  const h = new Date().getHours();
   return h < 5 ? "Working late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 function patch(el, html) {
@@ -284,7 +284,7 @@ function homeParts(needs = D.needItems()) {
   const next = active.find((n) => n.key === S.pin) || active[0] || null;
   S.pin = next ? next.key : null;
   const rest = active.filter((n) => n !== next);
-  return { needs, adm, active, next, then: rest.slice(0, 2), more: rest.slice(2), later: adm.filter((n) => n.later), held: needs.filter((n) => n.held), parked: needs.filter((n) => n.parked), glances: active.filter((n) => n.effort === "glance" && Kit.isBinary(n.ask) && n.group === "routine") };
+  return { needs, adm, active, next, then: rest.slice(0, 2), more: rest.slice(2), later: adm.filter((n) => n.later), held: needs.filter((n) => n.held), glances: active.filter((n) => n.effort === "glance" && Kit.isBinary(n.ask) && n.group === "routine") };
 }
 
 /** An answer button; a preview, when there is one, sits in a small swatch so the button never looks disabled. */
@@ -296,15 +296,16 @@ function nextActHtml(n) {
   const a = n.ask;
   const binary = Kit.isBinary(a);
   const ev = evidenceFor(n);
-  const reps = binary && a.kind === "permission" && n.risk !== "destructive" ? R.repeats(n) : 0;
-  const rule = reps >= 2 ? `<button type="button" class="nx-link is-rule" data-fid="rule" data-rule="${esc(n.key)}" title="Allow it and add a rule, shown word for word first">${ICON.rule}${ord(reps + 1)} time this week · make it a rule?</button>` : "";
   let html = "";
   if (n.effort === "glance" && Array.isArray(a.options) && !binary) {
     html += `<div class="nx-opts" role="group" aria-label="Answers">${a.options.map((o, i) => optHtml(o, i, ev)).join("")}</div>` +
       `<div class="nx-foot"><button type="button" class="nx-link" data-fid="ev" data-decide="${esc(n.key)}">${ICON.eye}Details</button><button type="button" class="nx-link" data-fid="back" data-nx-back>${ICON.rewind}Send back</button></div>`;
   } else if (n.effort === "glance" && binary) {
-    html += `<div class="nx-btns"><button type="button" class="b b-allow" data-fid="allow" data-nx-allow><span class="b-l">${ICON.check}Allow</span></button><button type="button" class="b b-back" data-fid="back" data-nx-back><span class="b-l">${ICON.rewind}Send back</span></button></div>` +
-      `<div class="nx-foot"><button type="button" class="nx-link" data-fid="ev" data-decide="${esc(n.key)}">${ICON.eye}Details</button>${rule}</div>`;
+    // a storm item's answers keep the server's own words (Allow once, Deny, Approve…)
+    const IP = a.item ? itemParts(a.item) : null;
+    const yes = IP && IP.primary ? IP.primary.label : "Allow", no = IP && IP.back ? IP.back.label : "Send back";
+    html += `<div class="nx-btns"><button type="button" class="b b-allow" data-fid="allow" data-nx-allow><span class="b-l">${ICON.check}${esc(yes)}</span></button><button type="button" class="b b-back" data-fid="back" data-nx-back><span class="b-l">${ICON.rewind}${esc(no)}</span></button></div>` +
+      `<div class="nx-foot"><button type="button" class="nx-link" data-fid="ev" data-decide="${esc(n.key)}">${ICON.eye}Details</button></div>`;
   } else {
     const verb = n.group === "stopped" ? "Look and choose" : n.risk === "destructive" ? "Read it closely" : n.ask.kind === "action" ? "See what it needs" : n.ask.replyOnly ? "Read and reply" : "Decide";
     html += `<div class="nx-btns one"><button type="button" class="b b-go" data-fid="go" data-decide="${esc(n.key)}"><span class="b-l">${verb}${ICON.arrow}</span></button>` +
@@ -316,13 +317,13 @@ function nextActHtml(n) {
 }
 function nextCardHtml(n) {
   const t = n.t, E = EFFORT[n.effort];
-  const head = Kit.commandOf(n.ask) ? `<span class="h-verb">Run</span> <code class="h-cmd">${esc(Kit.commandOf(n.ask))}</code>` : n.group === "stopped" ? `<span class="h-verb">Stopped at</span> ${esc((t.checklist.items.find((i) => i.state !== "done") || t).text || t.title)}` : esc(n.risk === "destructive" ? n.ask.title.replace(/:\s.*$/, "") : n.ask.title);
+  const head = n.ask.live ? renderInline(n.ask.title || "", true) : Kit.commandOf(n.ask) ? `<span class="h-verb">Run</span> <code class="h-cmd">${esc(Kit.commandOf(n.ask))}</code>` : n.group === "stopped" ? `<span class="h-verb">Stopped at</span> ${esc((t.checklist.items.find((i) => i.state !== "done") || t).text || t.title)}` : esc(n.risk === "destructive" ? n.ask.title.replace(/:\s.*$/, "") : n.ask.title);
   return `<article class="next r-${n.risk} e-${n.effort}" data-key="${esc(n.key)}" data-fid="nextcard" tabindex="-1" aria-label="Your next move: ${esc(n.ask.title)}">` +
     `<div class="stamp stamp-allow" aria-hidden="true"><svg viewBox="0 0 52 52"><circle class="sc" cx="26" cy="26" r="23"/><path class="sk" d="M15 27l7.5 7.5L38 19"/></svg></div>` +
     `<div class="nx-in">` +
     `<div class="nx-meta"><span class="eff e-${n.effort}">${dial(n.effort)}<b>${E.label}</b><span>${E.time}</span></span>` +
     (n.risk === "destructive" ? `<span class="risk r-destructive">${ICON.lock}Destructive</span>` : n.group === "stopped" ? `<span class="risk r-stopped">Stopped</span>` : "") +
-    `<button type="button" class="nx-where" data-fid="where" data-go="t:${esc(t.id)}" title="Open the thread">${esc(PROJ(t.project))}<span aria-hidden="true">›</span>${esc(t.title)}</button></div>` +
+    (t.host ? `<button type="button" class="nx-where" data-fid="where"${t.chatId ? ` data-go="${esc(convOfChat(t.project))}"` : t.plainSession ? ` data-go="c:${esc(t.plainSession)}"` : ""} title="Where it was asked">${esc(t.title)}</button></div>` : `<button type="button" class="nx-where" data-fid="where" data-go="t:${esc(t.id)}" title="Open the thread">${esc(PROJ(t.project))}<span aria-hidden="true">›</span>${esc(t.title)}</button></div>`) +
     `<h2 class="nx-h" id="nx-h">${head}</h2>` +
     (estLine(n) ? `<p class="nx-est" title="${n.t.live ? "From its checklist: the steps not done yet." : "An estimate: the steps left that wait on this answer × a typical step time."}">${ICON.hourglass}${esc(estLine(n))}</p>` : "") +
     (n.sug ? `<p class="c-sug" title="${esc(n.sug.why)}">${ICON.spark}<span>Suggests <b>${esc(n.sug.label)}</b></span><em>${esc(n.sug.sure)}</em></p>` : "") +
@@ -332,31 +333,21 @@ function nextCardHtml(n) {
 function homeRender(needs) {
   const box = $("#home");
   if (!box._built) {
-    box.innerHTML = `<div class="hm"><div id="hm-head"></div><div class="hm-body" id="hm-body"><div id="hm-moment"></div><div id="hm-next"></div><div id="hm-then"></div><div id="hm-finds"></div><div id="hm-end"></div></div></div>`;
+    box.innerHTML = `<div class="hm"><div id="hm-head"></div><div class="hm-body" id="hm-body"><div id="hm-next"></div><div id="hm-then"></div><div id="hm-end"></div></div></div>`;
     box._built = true;
   }
   const P0 = homeParts(needs);
   const working = world.state.threads.filter(isBusy);
-  const date = new Date(shifted()).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
-  const ph = NIGHT.phase;
+  const date = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
   const act = P0.active.length;
   let sub;
-  if (ph === "night") sub = "Sealed for the night.";
-  else if (act) sub = act === 1 ? "One thing is worth your time." : `${num(act)} things are worth your time.`;
+  if (act) sub = act === 1 ? "One thing is worth your time." : `${num(act)} things are worth your time.`;
   else sub = P0.held.length ? "Nothing needs you now." : "Nothing needs you.";
-  const down = !DEMO && (world.state.error || world.state.statusError) && !world.state.threads.length;
+  const down = (world.state.error || world.state.statusError) && !world.state.threads.length;
   if (down) sub = "XO can't be reached right now.";
-  const hello = ph === "morning" && NIGHT.away && S.morningOpen ? "Welcome back" : ph === "night" ? "Good night" : greeting();
+  const hello = greeting();
   patch($("#hm-head"), `<header class="hm-top"><div class="hm-hd"><p class="hm-date">${esc(date)}</p><h1 class="hm-h" id="home-h">${hello}.<span> ${sub}</span></h1></div>` +
     `<button type="button" class="create" data-create data-fid="create"><span class="create-ic">${ICON.plus}</span><span>Create XO Project</span></button></header>`);
-
-  if (ph === "night") { homeNight(needs); return; }
-  $("#home").classList.remove("is-night");
-
-  // the morning recap: on the first visit after the night only
-  patch($("#hm-moment"), ph === "morning" && S.morningOpen && NIGHT.harvest ? morningHtml(NIGHT.harvest) : "");
-  const tick = $("#hm-moment .tick");
-  if (tick && !NIGHT.seen) { NIGHT.seen = true; countUp(tick, +tick.dataset.to); }
 
   // the next move (stays put until it's done)
   const nb = $("#hm-next");
@@ -365,11 +356,11 @@ function homeRender(needs) {
   if (card0 && (card0.classList.contains("noting") || card0._busy) && P0.next && card0.dataset.key === P0.next.key) { /* don't disturb a note in progress */ }
   else if (P0.next && inPanel) {
     nb._key = null;
-    patch(nb, `<p class="hm-lbl"><span class="nx-glyph">${NEXT_GLYPH}</span>${ph === "morning" ? "Your first move" : "Your next move"}</p><p class="in-panel">${ICON.arrow}<span>Open in the panel</span></p>`);
+    patch(nb, `<p class="hm-lbl"><span class="nx-glyph">${NEXT_GLYPH}</span>Your next move</p><p class="in-panel">${ICON.arrow}<span>Open in the panel</span></p>`);
   } else if (P0.next) {
     const key = P0.next.key;
     const changed = nb._key !== key;
-    const html = `<p class="hm-lbl"><span class="nx-glyph">${NEXT_GLYPH}</span>${ph === "morning" ? "Your first move" : "Your next move"}</p>` + nextCardHtml(P0.next);
+    const html = `<p class="hm-lbl"><span class="nx-glyph">${NEXT_GLYPH}</span>Your next move</p>` + nextCardHtml(P0.next);
     if (patch(nb, html) && changed) {
       const card = nb.querySelector(".next");
       if (nb._key && !RM.matches) card.classList.add(S.pinAnim === "undo" ? "in-undo" : "in-next");
@@ -385,12 +376,7 @@ function homeRender(needs) {
 
   // then… at most two more
   let then = "";
-  const recap = ph === "morning" && S.morningOpen;
-  if (recap && P0.then.length) {
-    // on the morning's first visit the recap takes the room: the rest is one quiet line
-    const k = P0.then.length + P0.more.length;
-    then = `<div class="then-foot solo"><button type="button" class="hm-quiet" data-fid="more" data-open-all>+${k} more today</button></div>`;
-  } else if (P0.then.length) {
+  if (P0.then.length) {
     then = `<section class="then" aria-labelledby="then-h"><h2 class="hm-lbl" id="then-h">Then</h2><ol>` +
       P0.then.map((n) => `<li><button type="button" class="then-i r-${n.risk}" data-fid="then-${esc(n.key)}" data-decide="${esc(n.key)}">` +
         `<span class="eff e-${n.effort}">${dial(n.effort)}<b>${EFFORT[n.effort].label}</b></span>` +
@@ -405,98 +391,28 @@ function homeRender(needs) {
   } else if (P0.later.length) then = `<div class="then-foot solo"><button type="button" class="hm-quiet is-later" data-fid="bring" data-bring>${ICON.clock}${P0.later.length} later today <span>bring back</span></button></div>`;
   patch($("#hm-then"), then);
 
-  // found value: never pings, at most two
-  patch($("#hm-finds"), ph === "morning" && S.morningOpen ? "" : FV.shelfHtml(PROJ));
-
   endRender(P0, working);
 }
 
-/** The last line: Handled (with what can wait) and the end of the day. Its height never jumps. */
+/** The last line: Handled (with what can wait). Its height never jumps. */
 function endRender(P0, working) {
   const end = $("#hm-end");
   if (!end._built) {
-    end.innerHTML = `<section class="handled" id="handled" aria-label="Handled"><div class="hd-row0"><div id="hd-head"></div><div id="hd-eod"></div></div><div class="hd-b" id="hd-b" hidden><div class="hd-in" id="hd-in"></div></div></section>` +
-      `<section class="eod" id="eod" aria-labelledby="eod-h"><div class="eod-b" id="eod-b" hidden><div class="eod-in" id="eod-in"></div></div></section>`;
+    end.innerHTML = `<section class="handled" id="handled" aria-label="Handled"><div class="hd-row0"><div id="hd-head"></div></div><div class="hd-b" id="hd-b" hidden><div class="hd-in" id="hd-in"></div></div></section>`;
     end._built = true;
   }
   const w = working.length, held = P0.held;
   const bits = [w ? `${low(w)} working` : "nothing running", held.length ? `${low(held.length)} can wait` : ""].filter(Boolean);
   patch($("#hd-head"), `<button type="button" class="hd" data-fid="hd" data-handled aria-expanded="${S.handledOpen}" aria-controls="hd-b"><span class="hd-ic">${ICON.check}</span><span class="hd-t"><b>Handled</b> · ${bits.join(" · ")}</span>${w || held.length ? ICON.chevron : ""}</button>`);
-  const evening = NIGHT.phase === "evening";
-  patch($("#hd-eod"), !DEMO ? "" : `<button type="button" class="eod-btn${evening ? " is-due" : ""}" data-fid="eod" data-eod aria-expanded="${S.eodOpen}" aria-controls="eod-b" title="Queue tonight's work, then seal the day">${ICON.moon}<span>${evening ? "Before you go" : "End the day"}</span></button>`);
   if (S.handledOpen) patch($("#hd-in"), handledListHtml(P0, working));
-  if (S.eodOpen) patch($("#eod-in"), eodHtml(P0));
 }
 function handledListHtml(P0, working) {
   const rows = working.slice().sort((a, b) => a.project.localeCompare(b.project)).map((t) => {
     const c = t.checklist, cur = c.items.find((i) => i.state === "doing");
-    return `<li><button type="button" class="hd-r" data-go="t:${esc(t.id)}"><span class="hd-p">${esc(PROJ(t.project))}</span><span class="hd-tt">${t.planted ? `<span class="pl" title="Queued for tonight">${ICON.moon}</span>` : ""}${esc(t.title)}</span><span class="hd-now">${cur ? esc(cur.text) : ""}</span><span class="mini" aria-label="${c.done} of ${c.total}"><i style="--p:${c.total ? c.done / c.total : 0}"></i></span></button></li>`;
+    return `<li><button type="button" class="hd-r" data-go="t:${esc(t.id)}"><span class="hd-p">${esc(PROJ(t.project))}</span><span class="hd-tt">${esc(t.title)}</span><span class="hd-now">${cur ? esc(cur.text) : ""}</span><span class="mini" aria-label="${c.done} of ${c.total}"><i style="--p:${c.total ? c.done / c.total : 0}"></i></span></button></li>`;
   }).join("");
   const wait = P0.held.map((n) => `<li class="cw"><span class="cw-main"><span class="cw-t">${askTitle(n)}</span><span class="cw-why">${esc(PROJ(n.t.project))} · ${esc(n.heldWhy)}</span></span><button type="button" class="cw-in" data-bring-in="${esc(n.key)}">Bring in</button></li>`).join("");
   return (rows ? `<ul class="hd-ul">${rows}</ul>` : "") + (wait ? `<h3 class="hd-k">Can wait</h3><ul class="cw-ul">${wait}</ul>` : "");
-}
-
-/** Before you go: queue tonight's work, then seal. One moment, at the day boundary. */
-function eodHtml(P0) {
-  const f = NIGHT.forecast();
-  const seeds = NIGHT.seeds().slice(0, 3);
-  const full = f.slotsLeft <= 0;
-  const ships = f.ships.length;
-  return `<div class="eod-card"><header class="eod-h"><span class="eod-ic">${ICON.moon}</span><div><h2 id="eod-h">Before you go</h2><p>Queue up to three things to run overnight. You'll see what got done in the morning.</p></div></header>` +
-    `<ul class="seeds">${seeds.map((s) => `<li><button type="button" class="seed${s.planted ? " is-on" : ""}" data-plant="${s.id}" aria-pressed="${s.planted}"${!s.planted && full ? " disabled" : ""}>` +
-      `<span class="sd-ic">${s.planted ? ICON.check : ICON.plus}</span><span class="sd-t">${esc(s.title)}</span><span class="sd-p">${esc(PROJ(s.project))}</span><span class="sd-act">${s.planted ? "Queued" : "Queue for tonight"}</span></button></li>`).join("")}</ul>` +
-    `<div class="fc"><p class="fc-l"><span>By morning</span><b>${f.e ? `about ${f.lo}–${f.hi} steps` : "nothing planned"}</b>${ships ? `<span class="fc-s">· ${low(ships)} likely to finish</span>` : ""}<em>estimate</em></p>` +
-    (f.gain ? `<button type="button" class="fc-gain" data-gain>${ICON.arrow}<span>Answer ${f.gainAsks.length === 1 ? "one ask" : `${low(f.gainAsks.length)} asks`} first and about ${f.gain} more steps can run</span></button>` : "") + `</div>` +
-    `<footer class="eod-f"><button type="button" class="b b-seal" data-seal><span class="b-l">${ICON.moon}Seal the day</span></button><span class="eod-t">Notifications stay quiet until 9:00. Asks wait safely.</span></footer></div>`;
-}
-
-/** Night: the page goes still. The forecast you saw is the one that's sealed. */
-function homeNight(needs) {
-  $("#home").classList.add("is-night");
-  for (const id of ["#hm-next", "#hm-then", "#hm-finds"]) { patch($(id), ""); $(id)._key = null; }
-  $("#hm-end").innerHTML = ""; $("#hm-end")._built = false; $("#hm-end")._h = null;
-  const sl = NIGHT.sealed;
-  const f = sl.forecast;
-  const working = world.state.threads.filter(isBusy).length;
-  const queued = world.state.threads.filter((t) => t.planted && t.state !== "done");
-  const held = needs.length;
-  const until = clock(sl.until);
-  patch($("#hm-moment"), `<section class="night" aria-labelledby="night-h"><div class="night-mark">${ICON.moon}</div>` +
-    `<h2 id="night-h">Nothing needs you until morning.</h2><p class="night-p">Sealed until ${esc(until)}. Close the lid; the agents keep working.</p>` +
-    `<dl class="night-l"><div><dt>By morning</dt><dd>about ${f.lo}–${f.hi} steps <em>estimate</em></dd></div><div><dt>Working</dt><dd>${working} ${plural(working, "agent")}</dd></div>` +
-    (queued.length ? `<div><dt>Queued</dt><dd>${queued.map((t) => esc(t.title)).join(" · ")}</dd></div>` : "") +
-    (held ? `<div><dt>Waiting</dt><dd>${held} ${plural(held, "ask")}, held safely</dd></div>` : "") + `</dl>` +
-    `<div class="night-f"><button type="button" class="b b-sm b-back" data-morning data-fid="morning"><span class="b-l">${ICON.sun}See the morning<small>demo</small></span></button><button type="button" class="nx-link" data-unseal data-fid="unseal">Unseal</button></div></section>`);
-}
-
-/** The morning recap: what happened against what was forecast, from real state. */
-function morningHtml(h) {
-  const f = h.forecast;
-  const verdict = h.verdict === "in" ? "in the forecast" : h.verdict === "above" ? "above the forecast" : "below the forecast";
-  const lines = [];
-  const sh = h.shipped.slice().sort((x, y) => (y.planted ? 1 : 0) - (x.planted ? 1 : 0));
-  if (sh.length) lines.push(`<li><span class="mr-ic is-ok">${ICON.check}</span><span class="mr-t"><button type="button" class="mr-a" data-go="t:${esc(sh[0].tid)}">${esc(sh[0].title)}</button>${sh.length > 1 ? ` and ${low(sh.length - 1)} more` : ""} finished</span>${sh[0].planted ? `<span class="mr-tag">queued by you</span>` : ""}</li>`);
-  const rc = h.receipts.find((r) => r.steps >= 2 || r.shipped);
-  if (rc) lines.push(`<li title="An estimate: steps moved × a typical step time"><span class="mr-ic is-you">${ICON.spark}</span><span class="mr-t">Your answer on <b>${esc(rc.title)}</b> moved about ${Math.max(1, Math.round(rc.hours))} h of agent work</span></li>`);
-  // only what really waits on you now
-  const waiting = h.paused.filter((p) => { const t = world.thread(p.tid); return t && WAITING(t.state) && D.needItems().some((n) => n.t.id === t.id && n.admitted); });
-  for (const p of waiting.slice(0, 1)) lines.push(`<li><span class="mr-ic is-ask"><i class="dia"></i></span><span class="mr-t"><b>${esc(p.title)}</b> has a question for you</span></li>`);
-  const extra = FV.overflow().slice(0, 1);
-  const find = extra.length ? `<ul class="fd-list mr-finds">${extra.map((x) => FV.rowHtml(x, PROJ)).join("")}</ul>` : "";
-  return `<section class="morning" aria-labelledby="mr-h"><header class="mr-h"><span class="mr-sun">${ICON.sun}</span><h2 id="mr-h">${h.nights > 1 ? `While you were away · ${h.nights} nights` : "Last night"}</h2><button type="button" class="mr-x" data-morning-done aria-label="Fold the recap" title="Got it">${ICON.close}</button></header>` +
-    `<div class="mr-top"><p class="mr-big"><b class="tick" data-to="${h.steps}">${h.steps}</b> steps done</p><div class="mr-vs"><p>${verdict} <span>(${f.lo}–${f.hi})</span></p>${rangeBar(f.lo, f.hi, h.steps)}</div></div>` +
-    (lines.length ? `<ul class="mr-list">${lines.join("")}</ul>` : "") + find + `</section>`;
-}
-function rangeBar(lo, hi, actual) {
-  const max = Math.max(hi, actual ?? 0, 4) * 1.25;
-  const pct = (v) => `${Math.min(100, (v / max) * 100).toFixed(1)}%`;
-  return `<div class="rb" aria-hidden="true"><i class="rb-band" style="left:${pct(lo)};width:calc(${pct(hi)} - ${pct(lo)})"></i>${actual != null ? `<i class="rb-mark" style="left:${pct(actual)}"></i>` : ""}</div>`;
-}
-function countUp(el, to) {
-  if (RM.matches) { el.textContent = to; return; }
-  const t0 = performance.now(), dur = 900;
-  const f = (t) => { const k = Math.min(1, (t - t0) / dur); el.textContent = Math.round(to * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(f); };
-  el.textContent = "0"; requestAnimationFrame(f);
 }
 
 /** Decide straight from the Home card (Glance asks). The card stamps, then the next rises; focus lands on the new card. */
@@ -513,95 +429,19 @@ async function nextDecide(choice, note) {
   requestAnimationFrame(() => requestAnimationFrame(() => { const nc = $("#hm-next .next"); if (nc && S.view === "home" && !D.isOpen()) nc.focus({ preventScroll: true }); }));
 }
 
-// ── the end of the day ──────────────────────────────────────────────────────
-function toggleEod(open = !S.eodOpen) {
-  S.eodOpen = open;
-  const box = $("#eod");
-  if (open) { S.handledOpen = false; setHandled(false); patch($("#eod-in"), eodHtml(homeParts())); }
-  $("[data-eod]")?.setAttribute("aria-expanded", String(open));
-  expand(box, $("#eod-b"), open);
-  if (open) setTimeout(() => $("#eod")?.scrollIntoView({ block: "end", behavior: RM.matches ? "auto" : "smooth" }), 340);
-}
 function setHandled(open) {
   S.handledOpen = open;
   if (open) patch($("#hd-in"), handledListHtml(homeParts(), world.state.threads.filter(isBusy)));
   $("[data-handled]")?.setAttribute("aria-expanded", String(open));
   expand($("#handled"), $("#hd-b"), open);
 }
-function queueToggle(id) {
-  const was = NIGHT.seeds().find((s) => s.id === id)?.planted;
-  if (!NIGHT.plant(id)) { announce("Three is the most for one night. Remove one to swap it."); return; }
-  const s = NIGHT.seeds().find((x) => x.id === id);
-  announce(was ? `Removed ${s.title} from tonight.` : `Queued ${s.title} for tonight.`);
-  patch($("#eod-in"), eodHtml(homeParts()));
-}
-async function sealDay() {
-  const needs = D.needItems();
-  const can = NIGHT.canSeal(needs);
-  if (!can.ok) { heraldShow({ kind: "stopped", text: "Can't seal yet", sub: can.why }, 4200); return; }
-  if (D.isOpen()) D.close({ restore: false });
-  if (NIGHT.phase !== "evening") NIGHT.phase = "evening";
-  const body = $("#hm-body");
-  if (!RM.matches && body) await body.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, easing: "ease-in", fill: "forwards" }).finished;
-  await NIGHT.endDay();
-  P.sealed = true;
-  S.eodOpen = false; S.handledOpen = false;
-  sound.play("done");
-  announce("Sealed until morning. Nothing will need you before then.");
-  if (S.view !== "home") go("home");
-  render();
-  $("#home").scrollTop = 0; // while the page is faded out: the night card simply appears, nothing slides
-  if (!RM.matches && body) { body.getAnimations().forEach((a) => a.cancel()); body.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, easing: "ease-out" }); }
-  $("#home").focus({ preventScroll: true });
-}
-function unseal() {
-  NIGHT.reopen(); P.sealed = false;
-  announce("Unsealed. Asks can reach you again.");
-  heraldShow({ kind: "calm", text: "Unsealed", sub: "asks can reach you again" }, 3200);
-  render();
-}
-async function toMorning() {
-  if (NIGHT.phase !== "night") return;
-  const body = $("#hm-body");
-  if (!RM.matches && body) await body.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: "forwards" }).finished;
-  NIGHT.runNight(1);
-  P.sealed = false;
-  S.pin = null; S.morningOpen = true; NIGHT.seen = false;
-  rendered = null;
-  render();
-  $("#home").scrollTop = 0;
-  if (!RM.matches && body) { body.getAnimations().forEach((a) => a.cancel()); body.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: "ease-out" }); }
-  announce(`Good morning. ${NIGHT.harvest.steps} steps done overnight, ${NIGHT.harvest.shipped.length} finished.`);
-  $("#home").focus({ preventScroll: true }); // focus stays on the page: nothing is pre-selected
-}
-
 // ── conversations ───────────────────────────────────────────────────────────
-function wsSeed() {
-  const y = new Date(T0 - 86400000); y.setHours(17, 42, 0, 0);
-  const yd = y.getTime();
-  const nightly = world.state.threads.find((t) => /nightly/i.test(t.title));
-  return [
-    { id: "ws1", at: yd, who: "you", text: "What shipped across projects this week?" },
-    { id: "ws2", at: yd + 41000, who: "coord", text: "**This week**\n\n- **billing-api**: Stripe SDK v12 is in; the suite is green.\n- **marketing-site**: 1.2 MB of unused CSS removed.\n- **blackhole**: the HTML page is finished." },
-    { id: "ws3", at: yd + 95000, who: "you", text: "Keep the backfill on hold until I've looked at the cost. And only bring me what's worth it." },
-    { id: "ws4", at: yd + 120000, who: "coord", text: "Will do. I'll bring the asks that unblock the most work, bundle the small ones, and let the rest wait while their agents work around them. Destructive asks and stopped work always reach you." },
-    { id: "ws5", at: T0 - 52 * 60000, who: "you", text: "Why did the nightly job fail?" },
-    { id: "ws6", at: T0 - 51 * 60000, who: "coord", text: "It's the DST change. The schedule asks for 02:00 Berlin time, and on 2026-03-29 that minute didn't exist:\n\n```cron\n0 2 * * *  /opt/etl/nightly.sh --tz Europe/Berlin\n```\n\nI've routed it to **data-pipeline**.", thread: nightly?.id },
-  ];
-}
-let WS_SEED = null;
-const COORD_LINES = [
-  (t) => `On it. I started a thread${t.branch ? ` on \`${t.branch}\`` : ""}.`,
-  (t) => `Starting a thread${t.branch ? ` on \`${t.branch}\`` : ""}. It'll only come to you if it's worth your time.`,
-  (t) => `A thread is on it${t.branch ? ` (\`${t.branch}\`)` : ""}.`,
-];
-
 /** The chat behind a conversation: "ws" → workspace, "p:x" → x (threads use their project). */
 const chatOf = (conv) => (conv === "ws" || conv === "home" ? "workspace" : conv.startsWith("p:") ? conv.slice(2) : convThread(conv)?.project || null);
 const convOfChat = (chat) => (chat === "workspace" ? "ws" : "p:" + chat);
 
-/** Live: the real timeline (workspace or project) or the thread's own messages, with its root first. */
-function liveMessagesOf(conv) {
+/** The real timeline (workspace or project) or the thread's own messages, with its root first. */
+function messagesOf(conv) {
   const out = [];
   const t = convThread(conv);
   const chat = chatOf(conv);
@@ -628,11 +468,11 @@ function liveMessagesOf(conv) {
   const { on, alone } = threadAnchors(rows, ids);
   for (const m of rows) {
     const key = S.alias.get(m.id) || m.id;
-    const base = { key, at: m.at, text: m.text, sent: S.alias.has(m.id) };
+    const base = { key, at: m.at, seq: m.seq, text: m.text, sent: S.alias.has(m.id), files: m.files, chatId: m.chatId };
     if (m.who === "you") {
       out.push({ ...base, who: "you", fwd: conv !== "ws" && m.fwd ? m.fwd : null, routed: conv === "ws" ? st.routed[m.id] || null : null });
       if (alone.has(m.id)) out.push({ key: `${m.id}:card`, at: m.at, who: "card", thread: m.id });
-    } else if (m.who === "system") out.push({ ...base, who: "system" });
+    } else if (m.who === "system") out.push({ ...base, who: "system", passedOn: m.passedOn });
     else if (t && m.who === "agent" && /^✓\s/.test(m.text)) out.push({ key, at: m.at, who: "event", text: m.text.replace(/^✓\s*/, ""), tone: "ok" });
     else out.push({ ...base, who: m.who === "coord" ? "coord" : "agent", threads: on.get(m.id) || null });
   }
@@ -643,50 +483,64 @@ function liveMessagesOf(conv) {
       if (x.state === "failed") out.push({ key: `${x.id}:failed`, at: x.lastAt, who: "event", text: `${x.title} stopped`, tone: "stop" });
     }
     for (const d of D.decisions().filter((d) => d.project === pid)) out.push({ key: `dec:${d.id}`, at: d.at, who: "event", text: `You ${d.verb.toLowerCase()} · ${d.said || d.label}`, tone: d.choice === "deny" ? "back" : "ok" });
+    for (const d of D.notSent().filter((d) => d.project === pid)) out.push({ key: `dec:${d.id}`, at: d.at, who: "event", text: `Not sent · ${d.said || d.label} · ${d.why}`, tone: "sys" });
   }
+  // a thread's work: its session's turns, in place between its messages (storm's blocks)
+  if (t && t.sessionId && st.turns) {
+    const agentSeqs = rows.filter((m) => m.who === "agent" && m.seq != null).map((m) => m.seq);
+    for (const tu of st.turns.list((x) => x.session === t.sessionId)) {
+      const blocks = st.turns.blocksOf(tu);
+      const said = agentSeqs.some((q) => q >= (tu.seq ?? Infinity) && q <= (tu.lastSeq || Infinity));
+      out.push({ key: `turn:${tu.id}`, at: Date.parse(tu.at) || Date.now(), seq: tu.seq, who: "turn", turn: tu, blocks, hideAnswer: said });
+    }
+  }
+  // your messages relayed into this thread by its coordinator (if1 #7): the relay hop names them, and they
+  // stay on the project's timeline (storm doesn't copy them), so they're shown here in place, whatever the
+  // hops setting, marked as passed on, linking back to where you wrote them
+  if (t && st.hops) {
+    const { shown, missing } = relayedInto(t, st.hops.values(), st.timeline[t.project] || [], new Set(rows.map((m) => m.id)));
+    for (const m of shown) out.push({ key: `relay:${m.id}`, at: m.at, seq: m.seq, who: "you", text: m.text, files: m.files, chatId: m.chatId, relay: { project: t.project, id: m.id, fwd: m.fwd } });
+    if (world.act.findRows) for (const x of missing) world.act.findRows(t.project, x.ids, x.seq);
+  }
+  // how messages travelled to and from this thread (11 §16): hidden by default, shown by choice
+  if (t && S.showHops && st.hops) {
+    for (const hp of st.hops.values()) {
+      if (hp.thread_ts !== t.id) continue;
+      const text = hopLine(hp, PROJ(t.project));
+      if (text) out.push({ key: `hop:${hp.id}`, at: Date.parse(hp.at || hp.created_at) || 0, seq: hp.seq ?? null, who: "system", text });
+    }
+  }
+  // the Workspace's and a project's own hops, by the same choice: what a coordinator did on its own, and
+  // work handed on to another project (its forward and the answer back)
+  if (!t && chat && S.showHops && st.hops) {
+    const cid = world.act.chatId?.(chat);
+    // its own, and a forward into another project that one of its own asks caused
+    const mine = (hp) => hp.chat_id === cid || (hp.kind === "forward" && st.hops.get(hp.cause)?.chat_id === cid);
+    for (const hp of cid ? st.hops.values() : []) {
+      if (hp.thread_ts != null || !mine(hp)) continue;
+      const text = hopLine(hp, PROJ(chat), hp.kind === "forward" ? PROJ(world.act.projectOf?.(hp.chat_id) || "") : null);
+      if (text) out.push({ key: `hop:${hp.id}`, at: Date.parse(hp.at || hp.created_at) || 0, seq: hp.seq ?? null, who: "system", text });
+    }
+  }
+  // the coordinator's turn for your message failed: say so where you'll look (GitHub #30)
+  const fail = !t && chat ? st.failed && st.failed[chat] : null;
+  if (fail) out.push({ key: `fail:${fail.id}`, at: fail.at, who: "event", tone: "stop", text: `The coordinator couldn't answer: ${fail.error}` });
   if (!rows.length && !locals.length && !(h && (h.loading || h.error))) {
     out.push({ key: "empty", at: -Infinity, who: "note", text: t ? "No messages in this thread yet." : conv === "ws" ? "No messages yet. Ask the coordinator anything below." : "No messages yet. Tell this project's coordinator what you'd like done." });
   }
   out.push(...locals.filter((m) => !m.merged).map((m) => ({ ...m, key: m.id })));
-  out.sort((a, b) => a.at - b.at);
-  return out;
-}
-
-function messagesOf(conv, needs) {
-  if (!DEMO) return liveMessagesOf(conv);
-  const out = [];
-  if (conv === "ws") {
-    WS_SEED = WS_SEED || (DEMO ? wsSeed() : []);
-    out.push(...WS_SEED.map((m) => ({ ...m, key: m.id })));
-  } else if (conv.startsWith("p:")) {
-    const pid = conv.slice(2);
-    const ts = threadsOf(pid).filter((t) => !String(t.id).startsWith("many_")).sort((a, b) => a.createdAt - b.createdAt);
-    ts.forEach((t, i) => {
-      if (DEMO && S.localThread.get(t.id) !== conv) {
-        const req = t.messages.find((m) => m.who === "you");
-        if (req) {
-          out.push({ key: `${t.id}:req`, at: t.createdAt, who: "you", text: req.text });
-          out.push({ key: `${t.id}:start`, at: t.createdAt + (t.createdAt < T0 ? 20000 : 1), who: "coord", text: COORD_LINES[i % 3](t), thread: t.id });
-        } else out.push({ key: `${t.id}:start`, at: t.createdAt, who: "coord", text: "I noticed something worth doing and started a thread.", thread: t.id });
-      }
-      if (t.state === "done") out.push({ key: `${t.id}:done`, at: t.lastAt, who: "event", text: `${t.title} finished`, tone: "ok" });
-      if (t.state === "failed") out.push({ key: `${t.id}:failed`, at: t.lastAt, who: "event", text: `${t.title} stopped: ${String(t.happened || "").replace(/^Stopped:\s*/i, "")}`, tone: "stop" });
-    });
-    for (const d of D.decisions().filter((d) => d.project === pid)) out.push({ key: `dec:${d.id}`, at: d.at, who: "event", text: `You ${d.verb.toLowerCase()} · ${d.said || d.label}${d.fromSug ? " · as suggested" : ""}`, tone: d.choice === "deny" ? "back" : "ok" });
-  } else {
-    const t = convThread(conv);
-    if (t) {
-      for (const m of t.messages) {
-        const key = S.alias.get(m.id) || m.id;
-        if (m.who === "agent" && /^✓\s/.test(m.text)) out.push({ key, at: m.at, who: "event", text: m.text.replace(/^✓\s*/, ""), tone: "ok" });
-        else if (m.stopLine) out.push({ key, at: m.at, who: "event", text: m.text, tone: "back" });
-        else out.push({ key, at: m.at, who: m.who === "you" ? "you" : "agent", text: m.text, sent: S.alias.has(m.id) });
-      }
-    }
+  // storm's seq orders what the server stored; the rest (your unsent rows, notes, events) is
+  // merged in by time. Two sorted lists and one stable merge: a total order, so nothing jumps.
+  const stored = out.filter((m) => m.seq != null).sort((a, b) => a.seq - b.seq);
+  const rest = out.filter((m) => m.seq == null).sort((a, b) => a.at - b.at);
+  const merged = [];
+  let i = 0;
+  for (const m of stored) {
+    while (i < rest.length && rest[i].at < m.at) merged.push(rest[i++]);
+    merged.push(m);
   }
-  out.push(...(S.local[conv] || []).filter((m) => !m.merged).map((m) => ({ ...m, key: m.id })));
-  out.sort((a, b) => a.at - b.at);
-  return out;
+  while (i < rest.length) merged.push(rest[i++]);
+  return merged;
 }
 
 function threadCardHtml(tid, needs) {
@@ -715,7 +569,8 @@ function nameOf(conv, who) {
 }
 
 function msgItems(conv, needs) {
-  const list = messagesOf(conv, needs);
+  if (CH.isChats(conv)) return CH.items(conv);
+  const list = messagesOf(conv);
   const items = [];
   let day = "", prev = null;
   const lastYou = [...list].reverse().find((m) => m.who === "you");
@@ -731,9 +586,23 @@ function msgItems(conv, needs) {
       else if (m === lastYou && (m.status === "sent" || m.sent)) meta = `<div class="meta"><time>${clock(m.at)}</time><span class="sent">Sent ${ICON.check}</span></div>`;
       let route = "";
       if (m.waiting) route = `<div class="route-row"><i class="dash" aria-hidden="true"></i>Sent to <b>${esc(m.target === "workspace" ? "the coordinator" : PROJ(m.target))}</b> · waiting for a thread</div>`;
-      else if (m.fwd) route = `<div class="route-row">${ICON.arrow}<span>Forwarded from the <button type="button" class="rt-go" data-go="ws"><b>Workspace</b></button></span></div>`;
+      else if (m.relay) {
+        // passed on into this thread: say from where, and go back there (to the message itself)
+        const r = m.relay, P = PROJ(r.project);
+        route = r.fwd
+          ? `<div class="route-row">${ICON.arrow}<span>You, in the <button type="button" class="rt-go" data-go="ws" data-go-msg="${esc(r.fwd.id)}" title="Where you wrote it"><b>Workspace</b></button> · passed on by ${esc(P)}'s coordinator</span></div>`
+          : `<div class="route-row">${ICON.arrow}<span>You, in <button type="button" class="rt-go" data-go="p:${esc(r.project)}" data-go-msg="${esc(r.id)}" title="Where you wrote it"><b>${esc(P)}'s chat</b></button> · passed on by the coordinator</span></div>`;
+      }
+      else if (m.fwd) {
+        // work one project handed another: "from sys via the Workspace", back to where you wrote it
+        const src = fwdSource(m.fwd);
+        route = src
+          ? `<div class="route-row">${ICON.arrow}<span>From <button type="button" class="rt-go" data-go="p:${esc(src)}" data-go-msg="${esc(m.fwd.id)}" title="Where you wrote it"><b>${esc(PROJ(src))}</b></button> via the Workspace</span></div>`
+          : `<div class="route-row">${ICON.arrow}<span>Forwarded by the <button type="button" class="rt-go" data-go="ws" data-go-msg="${esc(m.fwd.id)}" title="Where you wrote it"><b>Workspace</b></button></span></div>`;
+      }
       else if (m.routed && m.routed.length) route = `<div class="route-row">${ICON.arrow}<span>Routed to ${[...new Set(m.routed.map((r) => r.chat))].map((c) => `<button type="button" class="rt-go" data-go="p:${esc(c)}"><b>${esc(PROJ(c))}</b></button>`).join(", ")}</span></div>`;
-      html = `<div class="m m-you${cont ? " cont" : ""}${m.status === "failed" ? " is-failed" : ""}${m.status === "sending" ? " is-pending" : ""}"><div class="bubble" title="${esc(clock(m.at))}">${esc(m.text)}</div>${meta}${route}</div>`;
+      const files = m.files && m.files.length ? filesHtml(m.files, m.chatId) : "";
+      html = `<div class="m m-you${cont ? " cont" : ""}${m.relay ? " is-relay" : ""}${m.status === "failed" ? " is-failed" : ""}${m.status === "sending" ? " is-pending" : ""}">${m.text ? `<div class="bubble" title="${esc(clock(m.at))}">${esc(m.text)}</div>` : ""}${files}${meta}${route}</div>`;
     } else if (m.who === "coord" || m.who === "agent") {
       const [name, role] = nameOf(conv, m.who);
       const av = m.who === "coord" ? `<div class="av">${XO}</div>` : `<div class="av av-t">${ICON.thread}</div>`;
@@ -742,17 +611,25 @@ function msgItems(conv, needs) {
       html = `<div class="m m-them${cont ? " cont" : ""}">${cont ? `<div class="av av-gap"></div>` : av}<div class="mb">` +
         (cont ? "" : `<div class="mh"><b>${esc(name)}</b>${role ? `<span class="role">${esc(role)}</span>` : ""}<time>${clock(m.at)}</time>${iq}</div>`) +
         `<div class="prose">${renderMarkdown(m.text)}</div>${tid ? threadCardHtml(tid, needs) : ""}${(m.threads || []).map((x) => threadCardHtml(x, needs)).join("")}</div></div>`;
+    } else if (m.who === "turn") {
+      const inner = turnHtml(m.turn, m.blocks, { open: S.tbOpen, hideAnswer: m.hideAnswer });
+      if (!inner) { prev = m; continue; }
+      html = `<div class="m m-them m-turn"><div class="av av-gap"></div><div class="mb">${inner}</div></div>`;
     } else if (m.who === "card") {
       html = `<div class="m m-them m-card"><div class="av av-gap"></div><div class="mb">${threadCardHtml(m.thread, needs)}</div></div>`;
+    } else if (m.who === "system" && m.passedOn) {
+      // XO's line: this project's work went on to another project, through the Workspace (always shown)
+      const p = m.passedOn;
+      html = `<div class="ev ev-sys ev-pass"><span class="ev-ic">${ICON.arrow}</span><span class="ev-t">Passed to <button type="button" class="rt-go" data-go="p:${esc(p.project)}"${p.to ? ` data-go-msg="${esc(p.to)}"` : ""} title="Open ${esc(PROJ(p.project))}'s chat"><b>${esc(PROJ(p.project))}</b></button> through the Workspace</span><time>${clock(m.at)}</time></div>`;
     } else if (m.who === "system") {
       html = `<div class="ev ev-sys" title="${esc(m.text)}"><span class="ev-ic">${ICON.router}</span><span class="ev-t">${esc(m.text)}</span><time>${clock(m.at)}</time></div>`;
     } else if (m.who === "note") {
       html = `<p class="m-note">${esc(m.text)}</p>`;
     } else if (m.who === "hist") {
       const h = m.h;
-      html = `<div class="day hist" role="separator">${h.loading ? `<span><i class="spin" aria-hidden="true"></i>Loading earlier messages…</span>` : h.all ? `<span>${h.capped ? "Showing the latest 1,000 messages" : "Beginning of the conversation"}</span>` : `<button type="button" class="hist-more" data-older>Earlier messages</button>`}</div>`;
+      html = `<div class="day hist" role="separator">${h.loading ? `<span><i class="spin" aria-hidden="true"></i>Loading earlier messages…</span>` : h.all ? `<span>${h.capped ? "Showing the latest 1,000 messages" : "Beginning of the conversation"}</span>` : h.olderError ? `<span>Couldn't load earlier messages</span><button type="button" class="hist-more" data-older>Try again</button>` : `<button type="button" class="hist-more" data-older>Earlier messages</button>`}</div>`;
     } else if (m.who === "event") {
-      html = `<div class="ev ev-${m.tone || "ok"}"><span class="ev-ic">${m.tone === "back" ? ICON.rewind : m.tone === "stop" ? ICON.close : ICON.check}</span><span class="ev-t">${esc(m.text)}</span><time>${clock(m.at)}</time></div>`;
+      html = `<div class="ev ev-${m.tone || "ok"}"><span class="ev-ic">${m.tone === "back" ? ICON.rewind : m.tone === "stop" ? ICON.close : m.tone === "sys" ? ICON.pause : ICON.check}</span><span class="ev-t">${esc(m.text)}</span><time>${clock(m.at)}</time></div>`;
     } else if (m.who === "rec") {
       const canUndo = m.undo && Date.now() < m.until;
       html = `<div class="ev ev-rec${m.refused ? " is-refused" : ""}"><span class="ev-ic">${m.refused ? ICON.close : ICON.router}</span><span class="ev-t">${esc(m.text)}</span>${canUndo ? `<button type="button" class="ev-undo" data-rec-undo="${esc(m.id)}">Undo</button>` : ""}<time>${clock(m.at)}</time></div>`;
@@ -764,22 +641,24 @@ function msgItems(conv, needs) {
 }
 
 // ── headers: Workspace, project (title + one sentence + the Now shelf), thread (+ checklist) ──
+/** hub #28: the Workspace's overview heads the page, always; the conversation opens on its newest
+ *  message below it, and earlier messages load in between as you scroll up. The title is the top bar's. */
 function wsHeadRender(needs) {
   const box = $("#ws-head");
   if (S.view !== "ws") { box.hidden = true; return; }
   box.hidden = false;
   const P0 = homeParts(needs);
   const working = world.state.threads.filter(isBusy).length;
-  const nd = sealed() ? 0 : P0.active.length;
-  const rs = R.rules();
-  const html = `<div class="wsh"><div class="wsh-mark">${XO}</div><h1 class="wsh-h" id="conv-title">Workspace</h1>` +
+  const nd = P0.active.length;
+  // GitHub #32: an open thread whose agent sits idle and asks nothing is "Idle", so every open thread counts once
+  const asking = new Set(needs.map((n) => n.t.id));
+  const idle = world.state.threads.filter((t) => t.state === "working" && !isBusy(t) && !asking.has(t.id)).length;
+  const html = `<div class="wsh"><div class="wsh-mark">${XO}</div><h2 class="wsh-h">Workspace</h2>` +
     `<p class="wsh-p">Your coordinator, across all ${projects().length} projects.</p>` +
-    `<dl class="wsh-stats"><div><dt>Working</dt><dd>${working}</dd></div><div><dt>Need you</dt><dd class="${nd ? "is-amber" : ""}">${nd}</dd></div><div><dt>Can wait</dt><dd>${P0.held.length}</dd></div><div><dt>Finished today</dt><dd class="is-green">${doneToday().length}</dd></div></dl>` +
-    (sealed() ? `<p class="wsh-calm">${ICON.moon}Sealed until morning. Ask for anything; nothing will ask you back tonight.</p>`
-      : P0.next ? `<button type="button" class="wsh-next" data-decide="${esc(P0.next.key)}"><span class="nx-glyph">${NEXT_GLYPH}</span><span class="wn-k">Next move</span><span class="wn-t">${askTitle(P0.next)}</span><span class="eff e-${P0.next.effort}">${dial(P0.next.effort)}<b>${EFFORT[P0.next.effort].label}</b></span></button>`
+    `<dl class="wsh-stats"><div><dt>Working</dt><dd>${working}</dd></div><div><dt>Need you</dt><dd class="${nd ? "is-amber" : ""}">${nd}</dd></div><div><dt>Can wait</dt><dd>${P0.held.length}</dd></div>${idle ? `<div><dt>Idle</dt><dd>${idle}</dd></div>` : ""}<div><dt>Finished today</dt><dd class="is-green">${doneToday().length}</dd></div></dl>` +
+    (P0.next ? `<button type="button" class="wsh-next" data-decide="${esc(P0.next.key)}"><span class="nx-glyph">${NEXT_GLYPH}</span><span class="wn-k">Next move</span><span class="wn-t">${askTitle(P0.next)}</span><span class="eff e-${P0.next.effort}">${dial(P0.next.effort)}<b>${EFFORT[P0.next.effort].label}</b></span></button>`
       : `<p class="wsh-calm">${ICON.check}Nothing needs you. Ask for anything below.</p>`) +
-    (!DEMO ? "" : `<section class="rules${S.rulesOpen ? " is-open" : ""}" id="rules"><button type="button" class="rl-h" data-rules aria-expanded="${S.rulesOpen}" aria-controls="rl-b">${ICON.rule}<span><b>${rs.length} ${plural(rs.length, "rule")}</b> answered ${R.absorbedTotal()} asks for you</span>${ICON.chevron}</button>` +
-    `<div class="rl-b" id="rl-b"${S.rulesOpen ? "" : " hidden"}><ul class="rl-ul">${rs.map((r) => `<li${r.fresh ? ' class="is-fresh"' : ""}><q>${esc(r.text)}</q><span>${r.absorbed} answered</span></li>`).join("")}</ul></div></section>`) + `</div>`;
+    `</div>`;
   patch(box, html);
 }
 
@@ -787,9 +666,21 @@ function topRender(needs) {
   const v = S.view;
   const t = convThread(v);
   const top = $("#top");
-  top.dataset.kind = v === "ws" ? "ws" : t ? "thread" : "project";
+  top.dataset.kind = t ? "thread" : "project"; // hub #28: the Workspace has a project's header, always shown
+  // a thin state line along the thread's header: amber needs you, blue working, green done, red stopped
+  top.dataset.state = !t ? "" : needs.some((n) => n.t.id === t.id && n.admitted) ? "need" : t.state === "failed" ? "stop" : isBusy(t) ? "busy" : t.state === "done" || t.state === "resolved" ? "done" : "";
   const back = $("#top-back");
   back.hidden = !t;
+  if (CH.isChats(v)) {
+    // Chats: the list, or one chat with its way back to the list
+    top.dataset.kind = v === "chats" ? "project" : "thread";
+    back.hidden = v === "chats";
+    if (v !== "chats") { back.innerHTML = `${ICON.back}<span>Chats</span>`; back.setAttribute("aria-label", "Back to Chats"); back.title = "Back (Esc)"; }
+    patch($("#top-who"), CH.headHtml(v));
+    patch($("#top-end"), "");
+    nowRender(needs); checklistRender(needs);
+    return;
+  }
   if (t) {
     const to = S.parent[v] || "p:" + t.project;
     const name = to === "home" ? "Home" : to === "ws" ? "Workspace" : PROJ(to.slice(2));
@@ -797,49 +688,93 @@ function topRender(needs) {
     back.setAttribute("aria-label", `Back to ${name}`);
     back.title = "Back (Esc)";
   }
-  let who;
-  if (v === "ws") who = `<span class="tw-mini">${XO}</span><span class="tw-t"><b>Workspace</b></span>`;
-  else if (v.startsWith("p:")) {
+  let who, end = "";
+  if (v === "ws") {
+    // hub #28: a normal chat's header, like a project's: the counts in one line, what needs you one click away
+    const P0 = homeParts(needs);
+    const nd = P0.active.length;
+    const asking = new Set(needs.map((n) => n.t.id));
+    const working = world.state.threads.filter(isBusy).length;
+    const idle = world.state.threads.filter((x) => x.state === "working" && !isBusy(x) && !asking.has(x.id)).length;
+    const done = doneToday().length;
+    const parts = [nd && `<b class="is-amber">${nd} need${nd === 1 ? "s" : ""} you</b>`, working && `${working} working`, P0.held.length && `${P0.held.length} can wait`, idle && `${idle} idle`, done && `${done} finished today`].filter(Boolean);
+    who = `<span class="tw-ic tw-xo" aria-hidden="true">${XO}</span><span class="tw-t"><h1 id="conv-title">Workspace</h1><span class="pj-s">${parts.join(" · ") || "All quiet"} · across ${projects().length} projects</span></span>`;
+    end = P0.next ? `<button type="button" class="all-btn is-need" data-decide="${esc(P0.next.key)}" title="${esc(askShort(P0.next))}">Next move<span>${nd}</span></button>` : "";
+  } else if (v.startsWith("p:")) {
     const pid = v.slice(2);
     const ts = threadsOf(pid);
-    const nd = sealed() ? 0 : needs.filter((n) => n.t.project === pid && n.admitted && !n.later).length;
+    const every = world.state.threads.filter((x) => x.project === pid); // resolved ones too: findable, reopenable
+    const nd = needs.filter((n) => n.t.project === pid && n.admitted && !n.later).length;
     const w = ts.filter(isBusy).length;
     const dn = ts.filter((x) => x.state === "done").length;
-    const parts = [nd && `<b class="is-amber">${nd} need${nd === 1 ? "s" : ""} you</b>`, w && `${w} working`, dn && `${dn} done this week`].filter(Boolean);
-    who = `<span class="tw-t"><h1 id="conv-title">${esc(PROJ(pid))}</h1><span class="pj-s">${parts.join(" · ") || (ts.length ? "All quiet" : "No threads yet")}${S.desc[pid] ? ` · ${esc(S.desc[pid])}` : ""}</span></span>` +
-      (ts.length ? `<button type="button" class="all-btn" data-all-threads aria-haspopup="dialog" title="All threads (T)">All threads<span>${ts.length}</span></button>` : "");
+    const rs = every.length - ts.length;
+    const parts = [nd && `<b class="is-amber">${nd} need${nd === 1 ? "s" : ""} you</b>`, w && `${w} working`, dn && `${dn} done this week`, rs && `${rs} resolved`].filter(Boolean);
+    who = `<span class="tw-ic" aria-hidden="true">${ICON.project}</span><span class="tw-t"><h1 id="conv-title">${esc(PROJ(pid))}</h1><span class="pj-s">${parts.join(" · ") || (every.length ? "All quiet" : "No threads yet")}${S.desc[pid] ? ` · ${esc(S.desc[pid])}` : ""}</span></span>`;
+    end = every.length ? `<button type="button" class="all-btn" data-all-threads aria-haspopup="dialog" title="All threads">All threads<span>${every.length}</span></button>` : "";
   } else if (t) {
-    who = `<h1 class="tw-h" id="conv-title">${esc(t.title)}</h1><span class="badge st-${t.state}"><i class="g g-${glyphOf(t)}" aria-hidden="true"></i>${wordOf(t)}</span>`;
+    const ed = S.tEdit && S.tEdit.tid === t.id ? S.tEdit.field : null;
+    const title = ed === "title"
+      ? `<input class="tw-in tw-in-t" id="tw-edit" data-tedit="title" maxlength="120" value="${esc(t.title)}" aria-label="Thread name">`
+      : `<h1 class="tw-h" id="conv-title">${esc(t.title)}</h1>`;
+    const label = ed === "label"
+      ? `<input class="tw-in tw-in-l" id="tw-edit" data-tedit="label" maxlength="32" value="${esc(t.label || "")}" placeholder="A short label" aria-label="Label">`
+      : t.label ? `<span class="tw-label" title="Label">${esc(t.label)}</span>` : "";
+    const resolved = t.state === "resolved";
+    const acts = world.act.storm ? `<span class="tw-acts"><button type="button" class="tw-act" data-resolve="${esc(t.id)}" data-to="${resolved ? "open" : "resolve"}" title="${resolved ? "Reopen it: its agent can pick it up again" : "Mark it resolved: nothing more is owed"}">${resolved ? ICON.retry : ICON.check}<span>${resolved ? "Reopen" : "Resolve"}</span></button>` +
+      `<button type="button" class="tw-act tw-more" data-tmenu="${esc(t.id)}" aria-haspopup="menu" aria-expanded="${S.tMenu === t.id}" title="Rename or label" aria-label="Rename or label">${ICON.edit}</button>` +
+      (S.tMenu === t.id ? `<span class="tw-menu" role="menu"><button type="button" role="menuitem" data-tfield="title">Rename</button><button type="button" role="menuitem" data-tfield="label">${t.label ? "Change label" : "Add a label"}</button>${t.label ? `<button type="button" role="menuitem" data-tfield="clear-label">Remove the label</button>` : ""}</span>` : "") + `</span>` : "";
+    who = `${title}${label}<span class="badge st-${t.state}"><i class="g g-${glyphOf(t)}" aria-hidden="true"></i>${wordOf(t)}</span>${acts}`;
+    // a field being edited is never replaced under the person's fingers (a frame may change the badge)
+    if (ed && $("#tw-edit")) who = null;
   } else who = `<span class="tw-t"><h1 id="conv-title">Thread</h1></span>`;
-  patch($("#top-who"), who);
+  if (who != null) patch($("#top-who"), who);
+  patch($("#top-end"), end);
   nowRender(needs);
   checklistRender(needs);
 }
 
-/** The Now shelf: at most three threads, needs-you first, then working. It never grows. */
+/** The Now strip, in the header row: every thread in progress as one slim chip (its state, its
+ *  name, its progress), needs-you first, then stopped, then working. One line high; it scrolls
+ *  sideways instead of growing. What each one is waiting on is said in the conversation below. */
 function nowRender(needs) {
   const wrap = $("#now-wrap");
   const v = S.view;
   const pid = v.startsWith("p:") ? v.slice(2) : null;
   if (!pid) { wrap.hidden = true; return; }
   const ts = threadsOf(pid);
-  const need = (t) => (sealed() ? null : needs.find((x) => x.t.id === t.id && x.admitted && !x.later));
+  const need = (t) => needs.find((x) => x.t.id === t.id && x.admitted && !x.later);
   const rankT = (t) => (need(t) ? 0 : t.state === "failed" ? 1 : t.state === "working" ? 2 : 9);
-  const shelf = ts.filter((t) => rankT(t) < 9).sort((a, b) => rankT(a) - rankT(b) || b.lastAt - a.lastAt).slice(0, 3);
+  const shelf = ts.filter((t) => rankT(t) < 9).sort((a, b) => rankT(a) - rankT(b) || b.lastAt - a.lastAt);
   wrap.hidden = !shelf.length;
   if (!shelf.length) return;
   const items = shelf.map((t) => {
     const c = t.checklist, n = need(t);
-    const cur = c.items.find((i) => i.state === "doing") || c.items.find((i) => i.state === "todo");
     const st = n ? "needs" : glyphOf(t);
-    const line = n ? `<span class="nw-ask">${esc(askShort(n))}</span>` : t.state === "failed" ? `<span class="nw-stop">${esc(String(t.happened || "Stopped").replace(/^Stopped:\s*/i, ""))}</span>` : cur ? esc(cur.text) : "";
-    return `<button type="button" class="nw st-${st}" role="listitem" data-go="t:${esc(t.id)}" title="${esc(t.title)}" aria-label="${esc(t.title)}, ${n ? "needs you" : wordOf(t).toLowerCase()}, ${c.done} of ${c.total}">` +
-      `<span class="nw-top"><i class="g g-${n ? "needs_reply" : glyphOf(t)}" aria-hidden="true"></i><b>${esc(t.title)}</b><span class="nw-n">${c.done}/${c.total}</span></span>` +
-      `<span class="nw-segs" aria-hidden="true">${c.items.map((i) => `<i class="sg s-${i.state}"></i>`).join("")}</span>` +
-      `<span class="nw-l">${line}</span></button>`;
+    const what = n ? `needs you: ${askShort(n)}` : t.state === "failed" ? String(t.happened || "Stopped") : wordOf(t).toLowerCase();
+    return `<button type="button" class="nw st-${st}" role="listitem" data-go="t:${esc(t.id)}" title="${esc(`${t.title} · ${c.done} of ${c.total} · ${what}`)}" aria-label="${esc(t.title)}, ${n ? "needs you" : wordOf(t).toLowerCase()}, ${c.done} of ${c.total}">` +
+      `<i class="g g-${n ? "needs_reply" : glyphOf(t)}" aria-hidden="true"></i><b>${esc(t.title)}</b>` +
+      `<span class="nw-segs" aria-hidden="true">${c.items.map((i) => `<i class="sg s-${i.state}"></i>`).join("")}</span></button>`;
   }).join("");
   patch(wrap, `<div class="now" role="list" aria-label="Now in ${esc(PROJ(pid))}">${items}</div>`);
+  nowEdges();
 }
+/** Fade the strip's edges only where there is more to scroll to. */
+function nowEdges() {
+  const now = $("#now-wrap .now");
+  if (!now) return;
+  const more = now.scrollWidth - now.clientWidth > 2;
+  now.classList.toggle("fade-l", more && now.scrollLeft > 2);
+  now.classList.toggle("fade-r", more && now.scrollLeft < now.scrollWidth - now.clientWidth - 2);
+}
+$("#now-wrap").addEventListener("scroll", nowEdges, { passive: true, capture: true });
+$("#now-wrap").addEventListener("wheel", (e) => {
+  // a mouse wheel scrolls the strip sideways
+  const now = e.target.closest(".now");
+  if (!now || Math.abs(e.deltaX) > Math.abs(e.deltaY) || now.scrollWidth <= now.clientWidth) return;
+  e.preventDefault();
+  now.scrollLeft += e.deltaY;
+}, { passive: false });
+addEventListener("resize", () => nowEdges());
 
 /** The checklist bar: shows the step in progress; a finished step flashes its tick, then moves on. */
 function checklistRender(needs) {
@@ -864,32 +799,194 @@ function checklistRender(needs) {
   else if (n && WAITING(t.state)) { mode = "needs"; nowHtml = `<span class="ck-m is-amber">◆</span><span>Paused on you</span>`; }
   else if (t.state === "failed") { mode = "failed"; nowHtml = `<span class="ck-m is-red">■</span><span>Stopped at “${esc(cur ? cur.text : "a step")}”</span>`; }
   else if (c.done >= c.total) { mode = "done"; nowHtml = `<span class="ck-m is-ok">${ICON.check}</span><span>All ${c.total} steps done</span>`; }
-  else if (t.state === "resolved") { mode = "done"; nowHtml = `<span class="ck-m">■</span><span>${DEMO ? "Stopped by you" : "Resolved"} at ${c.done} of ${c.total}</span>`; }
+  else if (t.state === "resolved") { mode = "done"; nowHtml = `<span class="ck-m">■</span><span>Resolved at ${c.done} of ${c.total}</span>`; }
   else nowHtml = `<span class="ck-m is-blue">✱</span><span>${esc(cur ? cur.text : "Working")}</span>`;
   const segs = c.items.map((i, k) => `<i class="sg s-${i.state}${fresh && k === c.done - 1 ? " is-pop" : ""}"></i>`).join("");
   const list = c.items.map((i) => `<li class="ck ck-${i.state}"><span class="ck-m" aria-hidden="true">${i.state === "done" ? "✓" : i.state === "doing" ? "✱" : "○"}</span><span>${esc(i.text)}</span><span class="sr-only">, ${i.state === "doing" ? "in progress" : i.state}</span></li>`).join("");
   const html = `<div class="ckbar m-${mode}${open ? " is-open" : ""}">` +
-    `<div class="ck-row"><button type="button" class="ck-tog" data-ck aria-expanded="${open}" aria-controls="ck-list" title="Checklist (C)">` +
+    `<div class="ck-row"><button type="button" class="ck-tog" data-ck aria-expanded="${open}" aria-controls="ck-list" title="Checklist">` +
     `<span class="ck-segs" aria-hidden="true">${segs}</span><span class="ck-n">${c.done} of ${c.total}</span>` +
     `<span class="ck-now" data-mode="${mode}">${nowHtml}</span>${t.branch ? `<code class="ck-br">${ICON.branch}${esc(t.branch)}</code>` : ""}<span class="ck-chev">${ICON.chevron}</span></button></div>` +
     `<div class="ck-b"><ol class="ck-list" id="ck-list" aria-label="Checklist">${list}</ol></div></div>`;
-  patch(th, html);
+  patch(th, html + runsStrip(t));
 }
+
+// ── sub-agents (U2, ch 14 §11): working now under the checklist; the list and each run in a sheet ──
+const LIVE_RUN = (r) => r.state === "running" || r.state === "waiting";
+const runsAsked = new Map(); // session → the working count its runs were last listed for
+function runsStrip(t) {
+  if (!t.sessionId || !world.state.runs) return "";
+  const mine = [...world.state.runs.values()].filter((r) => r.session === t.sessionId && !r.hidden);
+  const live = mine.filter((r) => LIVE_RUN(r) && (r.depth || 1) === 1);
+  // after a reload the stream hasn't named the runs still working: the thread's counts know, so list them
+  const lr = (world.state.liveRuns || {})[t.sessionId];
+  const working = Math.max((t.runs && (t.runs.running || 0) + (t.runs.waiting || 0)) || 0, lr ? lr.running + lr.waiting : 0, (t.session && t.session.live_runs) || 0);
+  // asked once per count: if the thread's counts stay stale after a read, the read isn't repeated
+  if (working > mine.filter(LIVE_RUN).length && runsAsked.get(t.sessionId) !== working) {
+    runsAsked.set(t.sessionId, working);
+    world.act.listRuns(t.sessionId).then(() => schedule(), () => {});
+  }
+  const total = Math.max((t.runs && t.runs.total) || 0, mine.length);
+  return runsStripHtml(live, total);
+}
+const runsEl = $("#runs"), runsCard = $("#runs-card");
+const RS = { gen: 0, open: false, session: null, title: "", view: "list", tree: [], counts: null, runId: null, run: null, anc: null, items: [], cursor: null, children: [], loading: false, error: null, gone: null, pollT: null, returnTo: null };
+const canStopRuns = () => !!(RS.session && world.act.feature && world.act.feature(RS.session, "runs.stop"));
+function runsRender() {
+  if (!RS.open) return;
+  const html = RS.view === "list"
+    ? runsListHtml(RS.tree, RS.counts, { canStop: canStopRuns(), title: RS.title })
+    : runViewHtml(RS.run || { id: RS.runId, title: "Sub-agent", state: "running" }, { anc: RS.anc, items: RS.items, children: RS.children, canStop: canStopRuns(), gone: RS.gone, error: RS.error, loading: RS.loading, open: S.tbOpen });
+  if (runsCard._h !== html) {
+    const body = runsCard.querySelector(".rn-body");
+    const keep = body ? body.scrollTop : 0;
+    runsCard.innerHTML = html; runsCard._h = html;
+    for (const x of runsCard.querySelectorAll("[data-close]")) x.innerHTML = ICON.close;
+    const nb = runsCard.querySelector(".rn-body");
+    if (nb && RS.keepScroll) nb.scrollTop = keep;
+    // a re-render must not drop focus out of the sheet (Escape, Tab stay inside it)
+    if (!runsEl.contains(document.activeElement)) runsCard.focus({ preventScroll: true });
+  }
+}
+function runsEscape() { if (RS.view === "run") { RS.gen++; RS.view = "list"; RS.runId = null; clearTimeout(RS.pollT); RS.keepScroll = false; runsRender(); } else closeRuns(); }
+async function openRuns(t, runId = null) {
+  if (!t || !t.sessionId) return;
+  if (!RS.open) RS.returnTo = document.activeElement;
+  Object.assign(RS, { open: true, session: t.sessionId, title: t.title, view: runId ? "run" : "list", runId, keepScroll: false });
+  runsEl.hidden = false;
+  runsRender();
+  try {
+    const d = await world.act.listRuns(t.sessionId);
+    RS.tree = d.runs || []; RS.counts = d.counts || null;
+  } catch (err) { RS.error = err.message; }
+  if (runId) openRun(runId); else { runsRender(); runsCard.querySelector(".rn-open, [data-close]")?.focus(); }
+}
+async function openRun(id) {
+  clearTimeout(RS.pollT);
+  const gen = ++RS.gen; // a read for another run (or a closed sheet) never writes into this one
+  Object.assign(RS, { view: "run", runId: id, run: world.state.runs.get(id) || null, anc: null, items: [], cursor: null, children: [], loading: true, error: null, gone: null, keepScroll: false });
+  runsRender();
+  try {
+    const r = await world.act.run(id);
+    if (gen !== RS.gen) return;
+    RS.run = { ...(world.state.runs.get(id) || {}), ...r, title: r.title || r.agent_type || "Sub-agent" };
+    RS.anc = r.ancestry || null;
+    const findKids = (nodes) => { for (const n of nodes || []) { if (n.id === id) return n.children || []; const k = findKids(n.children); if (k) return k; } return null; };
+    RS.children = findKids(RS.tree) || [];
+  } catch (err) { if (gen !== RS.gen) return; RS.error = err.message; }
+  await readTranscript(id, gen);
+  if (gen === RS.gen) runsCard.querySelector(".rn-back")?.focus();
+}
+/** Read the transcript; while the run works, read again from the last cursor and add only new items. */
+async function readTranscript(id, gen) {
+  const mine = () => RS.gen === gen && RS.runId === id && RS.open;
+  if (!mine()) return;
+  try {
+    let more = true, guard = 0;
+    while (more && guard++ < 20) {
+      const d = await world.act.transcript(id, RS.cursor);
+      if (!mine()) return;
+      const have = new Set(RS.items.map((i) => i.id));
+      RS.items.push(...(d.items || []).filter((i) => !have.has(i.id)));
+      if (d.next) RS.cursor = d.next;
+      more = !!d.next && (d.items || []).length > 0;
+      // a long transcript shows as each page arrives, not after the last one
+      if (more) { RS.loading = false; RS.keepScroll = true; runsRender(); }
+    }
+  } catch (err) {
+    if (!mine()) return;
+    if (err.code === "transcript_gone") RS.gone = err.summary || err.message;
+    else if (err.status === 501) RS.error = "This agent can't show a sub-agent's work.";
+    else RS.error = err.message;
+  }
+  RS.loading = false;
+  RS.keepScroll = true;
+  runsRender();
+  const live = world.state.runs.get(id);
+  if (mine() && (!live || LIVE_RUN(live)) && !RS.gone && !RS.error) RS.pollT = setTimeout(() => readTranscript(id, gen), 2500);
+}
+function closeRuns() {
+  if (!RS.open) return;
+  clearTimeout(RS.pollT);
+  RS.gen++; RS.open = false; runsEl.hidden = true; runsCard.innerHTML = ""; runsCard._h = "";
+  RS.returnTo?.focus?.({ preventScroll: true });
+}
+/** Stop one sub-agent, or all of a session's, after a 3 s Undo. */
+// Stops waiting out their Undo. One herald shows them all, so a second stop never hides the first's Undo.
+const pendingStops = [];
+function stopRunsUndo(what, fn) {
+  const job = { what, until: Date.now() + Kit.COMMIT_MS, cancelled: false, sent: false };
+  pendingStops.push(job);
+  stopsHerald();
+  announce(`Stopping ${what} in 3 seconds. Undo to keep it.`);
+  setTimeout(async () => {
+    const i = pendingStops.indexOf(job);
+    if (i >= 0) pendingStops.splice(i, 1);
+    if (job.cancelled) return;
+    job.sent = true;
+    stopsHerald(); // its Undo is over: the line keeps only the stops still waiting
+
+    try {
+      const r = await fn();
+      // 202: a stop was sent (its run.finished confirms it); 200 with nothing to stop: it had ended
+      const none = r && (r.stopping === false || (Array.isArray(r.stopping) && !r.stopping.length));
+      const n = r && Array.isArray(r.stopping) ? r.stopping.length : 0;
+      heraldShow({ kind: "halt", text: none ? "It had already finished" : "Stopping", sub: none ? what : n > 1 ? `${n} sub-agents · what they did is kept` : `${what} · what it did is kept` }, 3600);
+      announce(none ? `${what} had already finished.` : `Stopping ${what}. What it did is kept.`);
+    } catch (err) {
+      if (err.code === "run_not_live") heraldShow({ kind: "halt", text: "It had already finished", sub: what }, 3600);
+      else heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: err.status === 501 ? "this agent can't stop a sub-agent; stop the thread instead" : err.message }, 6000);
+    }
+    if (RS.open && RS.session) { try { const d = await world.act.listRuns(RS.session); RS.tree = d.runs || []; RS.counts = d.counts || null; } catch { /* the stream says it too */ } runsRender(); }
+  }, Kit.COMMIT_MS);
+}
+runsEl.addEventListener("click", (e) => {
+  if (e.target === runsEl || e.target.closest("[data-close]")) { closeRuns(); return; }
+  const tb = e.target.closest("[data-tb]");
+  if (tb) { S.tbOpen[tb.dataset.tb] = !S.tbOpen[tb.dataset.tb]; RS.keepScroll = true; runsRender(); return; }
+  if (e.target.closest("[data-runs-back]")) { RS.gen++; clearTimeout(RS.pollT); RS.view = "list"; RS.runId = null; RS.keepScroll = false; runsRender(); return; }
+  const st = e.target.closest("[data-run-stop]");
+  if (st) { const r = world.state.runs.get(st.dataset.runStop) || { title: "this sub-agent" }; stopRunsUndo(r.title, () => world.act.stopRun(st.dataset.runStop)); return; }
+  if (e.target.closest("[data-runs-stop]")) { const sid = RS.session; stopRunsUndo("every sub-agent of this thread", () => world.act.stopRuns(sid)); return; }
+  const op = e.target.closest("[data-run]");
+  if (op) openRun(op.dataset.run);
+});
+runsEl.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); runsEscape(); } });
 
 // ── the thread's own decision: docked above the composer (Today's card, #20) ──
 const tdock = $("#tdock");
 const TD = { key: null, busy: false };
 const keepBottom = () => { if (stuck && rendered && rendered !== "home") toBottom(false); };
 function dockRender(needs) {
-  const t = convThread(S.view);
-  const n = t && !D.isOpen() && !sealed() ? needs.find((x) => x.t.id === t.id && !x.later && (x.admitted || x.held)) : null;
-  const key = n ? n.key : null;
+  // a chat: its "send now" question first, else its own open decision (the chat's host), as a thread docks one
+  const hc = CH.isChats(S.view) ? CH.confirmHtml(S.view) : "";
+  if (hc) { if (tdock._ch !== hc) { tdock.innerHTML = hc; tdock._ch = hc; TD.key = null; } return; }
+  if (tdock._ch) { tdock._ch = ""; tdock.innerHTML = ""; TD.key = null; }
+  if (S.view === "chats") { if (TD.key) { TD.key = null; tdock.innerHTML = ""; } return; }
+  const t = convThread(S.view) || (S.view.startsWith("c:") ? (world.state.hosts || []).find((h) => h.id === `session:${S.view.slice(2)}`) : null);
+  const n = t && !D.isOpen() ? needs.find((x) => x.t.id === t.id && !x.later && (x.admitted || x.held)) : null;
+  // Folded: the person chose to read the thread first. The ask waits as one slim line, and the
+  // conversation isn't dimmed. A new ask on this thread docks open again.
+  const folded = !!(n && S.dockFold[n.key]);
+  const key = n ? n.key + (folded ? "|fold" : "") : null;
   if (TD.busy || key === TD.key) return;
   const prev = TD.key;
   TD.key = key;
   if (!n) {
     if (!prev) { tdock.innerHTML = ""; return; }
     morph(tdock, () => { tdock.innerHTML = ""; }, { duration: 300 });
+    return;
+  }
+  const head = (() => { const tp = document.createElement("template"); tp.innerHTML = D.cardHtml(n, "dock").trim(); return tp.content.querySelector(".c-h")?.textContent.trim() || askShort(n); })();
+  if (folded) {
+    const E = EFFORT[n.effort];
+    const bar = document.createElement("button");
+    bar.type = "button";
+    bar.className = `dock-fold r-${n.risk}`;
+    bar.dataset.unfold = n.key;
+    bar.title = "Open the decision";
+    bar.innerHTML = `<i class="g g-${n.group === "stopped" ? "failed" : "needs_reply"}" aria-hidden="true"></i><span class="df-t">${esc(head)}</span><span class="df-e">${esc(E.label)} ${esc(E.time)}</span><span class="df-go">Open ${ICON.chevron}</span>`;
+    morph(tdock, () => { tdock.innerHTML = ""; tdock.appendChild(bar); }, { duration: 300 });
     return;
   }
   const frame = document.createElement("article");
@@ -902,6 +999,9 @@ function dockRender(needs) {
   const inner = tpl.content.firstElementChild;
   frame.appendChild(inner);
   frame.setAttribute("aria-labelledby", inner.querySelector(".c-h").id);
+  const what = t.host ? "chat" : "thread";
+  // it sits in the card's own top row, on the effort label's line (hub #27), not floating over it
+  (inner.querySelector(".c-top") || frame).insertAdjacentHTML("beforeend", `<button type="button" class="dock-hide" data-fold="${esc(n.key)}" title="Fold it away and read the ${what} first">${ICON.chevron}<span>Read the ${what} first</span></button>`);
   morph(tdock, () => { tdock.innerHTML = ""; tdock.appendChild(frame); }, { duration: prev ? 300 : 360, fade: frame });
   D.wireCard(frame, inner, n, {
     surface: "dock",
@@ -913,8 +1013,9 @@ function dockRender(needs) {
         // one calm line in place of the card, then it folds away
         const e = D.decisions()[0];
         const verb = e && e.verb === "Answered" ? `Answered “${e.said}”` : e ? e.verb : "Done";
-        morph(frame, () => { frame.className = "card is-dock r-done"; frame.innerHTML = `<p class="tp-done${how === "back" ? " is-back" : ""}" role="status"><span class="tp-done-ic">${how === "back" ? ICON.rewind : ICON.check}</span><span><b>${esc(verb)}.</b> ${how === "back" ? "It's taking another route." : "It's back at work."}</span><span class="tp-done-u">Undo with U</span></p>`; }, { duration: 300 });
-        await wait(2200);
+        morph(frame, () => { frame.className = "card is-dock r-done"; frame.innerHTML = `<p class="tp-done${how === "back" ? " is-back" : ""}" role="status"><span class="tp-done-ic">${how === "back" ? ICON.rewind : ICON.check}</span><span><b>${esc(verb)}.</b> ${how === "back" ? "It's taking another route." : "It's back at work."}</span><button type="button" class="tp-done-u" data-dock-undo>Undo</button></p>`; }, { duration: 300 });
+        // the only Undo for this decision now: it stays for the whole 3 s window
+        await wait(RM.matches ? 3000 : 2700);
       }
       TD.busy = false;
       TD.key = "__settling";
@@ -924,6 +1025,13 @@ function dockRender(needs) {
     },
   });
 }
+tdock.addEventListener("click", (e) => {
+  const f = e.target.closest("[data-fold]");
+  if (f) { S.dockFold[f.dataset.fold] = true; dockRender(D.needItems()); scroller.focus({ preventScroll: true }); return; }
+  const u = e.target.closest("[data-unfold]");
+  if (u) { delete S.dockFold[u.dataset.unfold]; dockRender(D.needItems()); requestAnimationFrame(() => tdock.querySelector(".card")?.focus({ preventScroll: true })); return; }
+  if (e.target.closest("[data-dock-undo]")) D.undo();
+});
 tdock.addEventListener("keydown", (e) => {
   const card = tdock.querySelector(".card");
   if (!card) return;
@@ -935,14 +1043,18 @@ function typingRender() {
   const box = $("#typing");
   const t = convThread(S.view);
   let html = "";
-  const chat = !DEMO && !t && S.view !== "home" ? chatOf(S.view) : null;
+  const chat = !t && S.view !== "home" ? chatOf(S.view) : null;
   if (chat && world.act.replying(chat)) {
-    // live: the heartbeat's coordinator_busy, or our message still waiting for its answer (never a timer)
+    // the coordinator's session really works, or our message still waits for its answer (never a timer)
     const aw = world.state.awaiting[chat];
     const who = S.view === "ws" ? "The coordinator" : `${esc(PROJ(chat))} coordinator`;
-    html = `<div class="typing" role="status"><div class="av av-w">${XO}</div><div class="ty-b"><span class="shimmer">${who} is ${aw ? "replying" : "working"}</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>${aw ? `<span class="elapsed" data-since="${aw.at}"></span>` : ""}</div></div>`;
-  } else if (S.typing[S.view]) {
-    html = `<div class="typing" role="status"><div class="av av-w">${XO}</div><div class="ty-b"><span class="shimmer">${S.view === "ws" ? "The coordinator" : `${esc(PROJ(convProject(S.view)))} coordinator`} is replying</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>`;
+    const doing = world.act.doing ? world.act.doing(chat) : null;
+    html = `<div class="typing" role="status"><div class="av av-w">${XO}</div><div class="ty-b"><span class="shimmer">${who} is ${aw ? "replying" : "working"}${doing ? ` · ${esc(doing.replace(/`/g, ""))}` : ""}</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>${aw ? `<span class="elapsed" data-since="${aw.at}"></span>` : ""}</div></div>`;
+  } else if (S.view.startsWith("c:")) {
+    const sid = S.view.slice(2), tu = world.state.turns && world.state.turns.running(sid);
+    if (CH.working(S.view) && !(tu && world.state.turns.blocksOf(tu).length)) html = `<div class="typing" role="status"><div class="av av-t av-w">${ICON.thread}</div><div class="ty-b"><span class="shimmer">Working</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>`;
+  } else if (t && t.sessionId && world.state.turns && world.state.turns.running(t.sessionId) && world.state.turns.blocksOf(world.state.turns.running(t.sessionId)).length) {
+    html = ""; // its running turn shows the work itself
   } else if (t && isBusy(t)) {
     const cur = t.checklist.items.find((i) => i.state === "doing");
     html = `<div class="typing" role="status"><div class="av av-t av-w">${ICON.thread}</div><div class="ty-b"><span class="shimmer">Working${cur ? ` · ${esc(cur.text)}` : ""}</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="elapsed" data-since="${t.lastAt}"></span></div></div>`;
@@ -956,37 +1068,70 @@ function tickElapsed() { for (const el of $$(".elapsed[data-since]")) el.textCon
 setInterval(tickElapsed, 1000);
 
 // ── the dock line: one calm labelled line (no glow on the composer, ever) ───
-const OWN = new Set(["sent", "started", "ready", "clear", "rec", "rule", "halt"]);
+const OWN = new Set(["sent", "started", "ready", "clear", "rec", "halt"]);
+// Lines waiting for an Undo on screen to end: an Undo is never pushed out of reach by a newer line.
+const HQ = [];
 function heraldShow(h, ms = 4200) {
-  if (S.herald && OWN.has(S.herald.kind) && !OWN.has(h.kind) && S.herald.until > Date.now()) return;
+  const now = Date.now();
+  const cur = S.herald && S.herald.until > now ? S.herald : null;
+  const stops = h.tag === "stops";
+  if (cur && cur.undo && !(stops && cur.tag === "stops")) {
+    if (stops) {
+      // a Stop's own Undo shows at once (its 3 s are already running); the line it covers comes back after
+      HQ.unshift({ h: cur, ms: Math.max(3000, cur.until - now) });
+    } else if (h.undo || h.force || OWN.has(h.kind)) { HQ.push({ h, ms }); return; }
+    else return; // a passing notice yields to an Undo
+  }
+  if (!h.force && !h.undo && !stops && cur && OWN.has(cur.kind) && !OWN.has(h.kind)) return;
+  heraldPut(h, ms);
+}
+function heraldPut(h, ms) {
   S.herald = { ...h, until: Date.now() + ms, n: (S.herald?.n || 0) + 1 };
   clearTimeout(heraldShow.t);
-  heraldShow.t = setTimeout(schedule, ms + 40);
+  heraldShow.t = setTimeout(heraldNext, ms + 40);
   schedule();
+}
+/** The line on screen ended (or was cleared): the next waiting line, Undo lines first, in order; of those
+ *  without one only the newest shows (each was already announced). */
+function heraldNext() {
+  if (S.herald && S.herald.until > Date.now() && S.herald.undo) return;
+  const iu = HQ.findIndex((x) => x.h.undo);
+  let next = null;
+  if (iu >= 0) next = HQ.splice(iu, 1)[0];
+  else if (HQ.length) { next = HQ[HQ.length - 1]; HQ.length = 0; }
+  if (!next) { schedule(); return; }
+  let { h, ms } = next;
+  // a line whose Undo has a deadline (h.undoUntil) comes back only for what is left of it, or without its Undo
+  if (h.undo && h.undoUntil) {
+    const left = h.undoUntil - Date.now();
+    if (left < 600) { h = { ...h, undo: null, undoUntil: 0 }; ms = Math.min(ms, 2400); } else ms = Math.min(ms, left);
+  }
+  heraldPut(h, ms);
 }
 function heraldRender(needs) {
   const box = $("#herald");
   const h = S.herald && S.herald.until > Date.now() ? S.herald : null;
   let html;
   if (h) {
-    const ic = h.kind === "stopped" ? `<span class="hr-ic k-stopped">${ICON.close}</span>` : h.kind === "sent" ? `<i class="dash" aria-hidden="true"></i>` : h.kind === "ping" ? `<span class="hr-ic k-ping"><i class="hr-dot"></i></span>` : h.kind === "calm" || h.kind === "halt" ? `<span class="hr-ic k-calm">${h.kind === "halt" ? STOP_ICON : ICON.pause}</span>` : h.kind === "rule" ? `<span class="hr-ic k-ok">${ICON.rule}</span>` : h.kind === "rec" ? `<span class="hr-ic k-calm">${ICON.router}</span>` : `<span class="hr-ic k-ok">${ICON.check}</span>`;
+    const ic = h.kind === "stopped" ? `<span class="hr-ic k-stopped">${ICON.close}</span>` : h.kind === "sent" ? `<i class="dash" aria-hidden="true"></i>` : h.kind === "ping" ? `<span class="hr-ic k-ping"><i class="hr-dot"></i></span>` : h.kind === "calm" || h.kind === "halt" ? `<span class="hr-ic k-calm">${h.kind === "halt" ? STOP_ICON : ICON.pause}</span>` : h.kind === "rec" ? `<span class="hr-ic k-calm">${ICON.router}</span>` : `<span class="hr-ic k-ok">${ICON.check}</span>`;
     const inner = `${ic}<span class="hr-t">${esc(h.text)}</span>${h.sub ? `<span class="hr-s">${esc(h.sub)}</span>` : ""}${h.open ? `<span class="hr-go">Open ${ICON.arrow}</span>` : h.decide ? `<span class="hr-go">Look ${ICON.arrow}</span>` : ""}`;
     html = h.open ? `<button type="button" class="hr hr-ev k-${h.kind}" data-go="${esc(h.open)}" data-hn="${h.n}">${inner}</button>`
       : h.decide ? `<button type="button" class="hr hr-ev k-${h.kind}" data-decide="${esc(h.decide)}" data-hn="${h.n}">${inner}</button>`
-      : h.undo ? `<div class="hr hr-ev k-${h.kind}" data-hn="${h.n}">${inner}<button type="button" class="hr-undo" data-herald-undo>Undo</button></div>`
+      : h.undo ? `<div class="hr hr-ev has-undo k-${h.kind}" data-hn="${h.n}">${inner}<button type="button" class="hr-undo" data-herald-undo>${esc(h.undoLabel || "Undo")}</button></div>`
       : `<div class="hr hr-ev k-${h.kind}" data-hn="${h.n}">${inner}</div>`;
-  } else if (!DEMO && connLine(world.state.status, world.state.statusError, world.state.error)) {
-    // live: an honest, persistent line when XO can't be reached or can't take messages (P0-8)
-    const c = connLine(world.state.status, world.state.statusError, world.state.error);
+  } else if (connLine(world.state)) {
+    // an honest, persistent line when XO can't be reached, can't run, or waits on a limit (P0-8)
+    const c = connLine(world.state);
     html = `<div class="hr hr-conn k-${c.kind}" role="status"><span class="hr-ic ${c.kind === "down" ? "k-stopped" : "k-calm"}">${c.kind === "down" ? ICON.retry : ICON.pause}</span><span class="hr-t">${esc(c.text)}</span><span class="hr-s">${esc(c.sub)}</span></div>`;
   } else if (S.view === "home" || convThread(S.view)) html = "";
-  else if (sealed()) html = `<div class="hr hr-calm"><span class="hr-ic k-calm">${ICON.moon}</span><span class="hr-t">Sealed until morning</span></div>`;
   else {
+    // Only when something is worth your time. The quiet state ("Nothing needs you")
+    // are already said by the sidebar's Home row and by Home, so no line sits here for them.
     const P0 = homeParts(needs);
     const nd = P0.active.length;
     html = nd && P0.next
-      ? `<button type="button" class="hr hr-need" data-next title="Take the next move (N)"><i class="hr-dot" aria-hidden="true"></i><span class="hr-t"><b>${nd}</b> worth your time</span><span class="hr-s">next is ${EFFORT[P0.next.effort].long}</span>${ICON.right}</button>`
-      : `<div class="hr hr-calm"><span class="hr-ic k-ok">${ICON.check}</span><span class="hr-t">Nothing needs you</span></div>`;
+      ? `<button type="button" class="hr hr-need" data-next title="Take the next move"><i class="hr-dot" aria-hidden="true"></i><span class="hr-t"><b>${nd}</b> worth your time</span><span class="hr-s">next is ${EFFORT[P0.next.effort].long}</span>${ICON.right}</button>`
+      : "";
   }
   const was = box._h;
   if (patch(box, html) && was != null && html) box.firstElementChild?.classList.add("is-in");
@@ -998,7 +1143,7 @@ function recordLine(session, rec) {
   const m = { id: `rec${++S.n}`, who: "rec", at: Date.now(), text: rec.text, refused: !!rec.refused, undo: rec.undo || null, until: Date.now() + 3000 };
   (S.local[conv] = S.local[conv] || []).push(m);
   if (rec.undo) setTimeout(schedule, 3050);
-  if (S.view === "home" || (S.view !== conv)) heraldShow({ kind: "rec", text: rec.text, undo: rec.undo ? m.id : null }, rec.undo ? 3200 : 4200);
+  if (S.view === "home" || (S.view !== conv)) heraldShow({ kind: "rec", text: rec.text, undo: rec.undo ? m.id : null, undoUntil: rec.undo ? m.until : 0 }, rec.undo ? 3200 : 4200);
   announce(rec.text);
   schedule();
 }
@@ -1009,7 +1154,7 @@ function undoRecord(id) {
       m.undo(); m.undo = null;
       m.text = `${m.text} · undone`;
       announce("Undone.");
-      if (S.herald && S.herald.undo === id) S.herald.until = 0;
+      if (S.herald && S.herald.undo === id) { S.herald.until = 0; heraldNext(); }
       schedule();
       return;
     }
@@ -1017,10 +1162,13 @@ function undoRecord(id) {
 }
 function chipRender(fade = false) {
   const chip = $("#iq");
+  // a chat's agent, model and mode are set in the line above the composer, not by the router
+  chip.hidden = CH.isChats(S.view);
+  if (chip.hidden) return;
   const s = sessionOf(S.view);
   const html = IQ.chipHtml(s, PHONE.matches);
   chip.title = IQ.chipTitle(s);
-  chip.setAttribute("aria-label", `Intelligence: ${IQ.chipTitle(s).replace(/ \(M\)$/, "")}`);
+  chip.setAttribute("aria-label", `Intelligence: ${IQ.chipTitle(s).replace(/ \([^)]*\)$/, "")}`);
   chip.classList.toggle("is-pinned", IQ.current(s).pinned);
   if (chip._h === html) return;
   const swap = () => { chip.innerHTML = html; chip._h = html; };
@@ -1031,12 +1179,125 @@ function chipRender(fade = false) {
 
 // ── the composer: send, or Stop while something runs ───────────────────────
 const say = $("#say"), atList = $("#at-list");
-function parseTarget(text) {
-  const m = text.match(/(^|\s)@([\w.-]+)/);
-  if (!m) return null;
-  const q = m[2].toLowerCase();
-  const p = world.state.projects.find((x) => x.id.toLowerCase() === q || x.name.toLowerCase() === q);
-  return p ? p.id : null;
+
+// ── files on the unsent message (hub #30): the paperclip, a drop or a paste adds them; each uploads
+// at once to the chat this conversation writes to, as a chip with its progress, Retry and Remove.
+// Send waits for every upload and stays off while one has failed. A long paste becomes a file.
+const trayEl = $("#att-tray"), attInput = $("#att-input");
+let trayRaf = 0;
+const tray = createTray({ upload: uploadAttachment, onChange: () => { if (!trayRaf) trayRaf = requestAnimationFrame(() => { trayRaf = 0; trayRender(); sendRender(); }); } });
+/** Storm conversations take files; a plain chat (Chats) has no route for them. */
+const canAttach = (v) => v !== "chats" && !CH.isChats(v);
+/** The chat id a file added here uploads to: the Workspace, the project, or the thread's project. */
+const attachChat = (v) => { const p = chatOf(v); return p && world.act.chatId ? world.act.chatId(p) : null; };
+const filesHere = () => (canAttach(S.view) ? tray.status(S.view) : { count: 0, busy: false, failed: false });
+// An image chip shows the picture itself, from the bytes the browser already holds: no request.
+const thumbs = new WeakMap(); // blob → object URL, freed when the chip leaves the composer
+const thumbOf = (c) => { let u = thumbs.get(c.blob); if (!u) { u = URL.createObjectURL(c.blob); thumbs.set(c.blob, u); } return u; };
+const dropThumb = (c) => { const u = c && thumbs.get(c.blob); if (u) { URL.revokeObjectURL(u); thumbs.delete(c.blob); } };
+function chipHtml(c) {
+  const img = c.type ? kindOf(c.type) === "image" : /^image\//.test(c.blob?.type || "");
+  const thumb = img && c.blob && c.state !== "failed";
+  // once uploaded it opens in the viewer, like a sent message's file
+  const ic = thumb ? `<img src="${esc(thumbOf(c))}" alt="" decoding="async">` : img ? ICON.image : ICON.doc;
+  const state = c.state === "failed" ? `<span class="att-err">${esc(uploadErrorText(c.err))}</span>`
+    : c.state === "uploading" ? `<span class="att-pct">Uploading</span>` : "";
+  const sub = [c.paste ? esc(c.name) : esc(fmtSize(c.bytes ?? c.size)), state].filter(Boolean).join(" · ");
+  const btn = (a, label, icon, extra = "") => `<button type="button" class="att-b" data-a="${a}" aria-label="${esc(label)}" title="${esc(label)}"${extra}>${icon}</button>`;
+  return `<li class="att st-${c.state}${c.paste ? " is-paste" : ""}" data-lid="${esc(c.lid)}"${c.err ? ` title="${esc(c.err.message || "")}"` : ""}>` +
+    (thumb && c.id ? `<button type="button" class="att-ic is-img" data-a="view" aria-label="Preview ${esc(c.name)}" title="Preview">${ic}</button>` : `<span class="att-ic${thumb ? " is-img" : ""}">${ic}</span>`) +
+    `<span class="att-t"><span class="att-n">${esc(c.paste ? pasteLabel(c.paste) : c.name)}</span><span class="att-m">${sub}</span></span>` +
+    (c.paste ? btn("view", "Preview the pasted text", ICON.eye) + `<button type="button" class="att-tx" data-a="inline" title="Put it back in the message as text">As text</button>` : "") +
+    (c.state === "failed" && !FINAL.has(c.err?.code) ? btn("retry", `Retry ${c.name}`, ICON.retry) : "") +
+    btn("x", `Remove ${c.paste ? "the pasted text" : c.name}`, ICON.close) +
+    `<i class="att-bar" aria-hidden="true"></i></li>`;
+}
+function trayRender() {
+  const on = canAttach(S.view);
+  $("#attach").hidden = !on;
+  const list = on ? tray.list(S.view) : [];
+  trayEl.hidden = !list.length;
+  $("#att-note").hidden = !list.length;
+  $("#composer").classList.toggle("has-files", !!list.length);
+  const html = list.map(chipHtml).join("");
+  if (trayEl._h !== html) { trayEl.innerHTML = html; trayEl._h = html; }
+  // progress moves without redrawing the chips (a focused Remove stays focused)
+  for (const c of list) {
+    const el = trayEl.querySelector(`[data-lid="${CSS.escape(c.lid)}"]`);
+    if (!el) continue;
+    const p = c.state === "uploading" ? Math.min(1, (c.sent || 0) / Math.max(1, c.size)) : c.state === "done" ? 1 : 0;
+    el.style.setProperty("--p", String(p));
+    const pct = el.querySelector(".att-pct");
+    if (pct) pct.textContent = c.sent ? `${Math.floor(p * 100)}%` : "Uploading";
+  }
+}
+function addFiles(files) {
+  const list = [...(files || [])];
+  if (!list.length) return;
+  if (!canAttach(S.view)) { announce("Files can't be attached in this conversation."); return; }
+  const chat = attachChat(S.view);
+  if (!chat) { heraldShow({ kind: "stopped", text: "Files can't be attached yet", sub: "still connecting to XO" }, 4600); return; }
+  const refused = tray.add(S.view, chat, list);
+  const took = list.length - refused.length;
+  if (refused.length) {
+    heraldShow({ kind: "stopped", text: refused.length === 1 ? `${refused[0].name} wasn't attached` : `${refused.length} files weren't attached`, sub: refused[0].why }, 6000);
+    announce(`${refused.map((r) => `${r.name}: ${r.why}`).join(" ")}`);
+  }
+  if (took) announce(`${took === 1 ? "1 file" : `${took} files`} uploading.`);
+  updateComposer();
+  say.focus({ preventScroll: true });
+}
+function insertText(text) {
+  say.focus({ preventScroll: true });
+  say.setRangeText(text, say.selectionStart, say.selectionEnd, "end");
+  updateComposer(); saveDraft();
+}
+$("#attach").innerHTML = ICON.clip;
+$("#attach").addEventListener("click", () => attInput.click());
+attInput.addEventListener("change", () => { addFiles(attInput.files); attInput.value = ""; });
+trayEl.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-a]");
+  const li = b && b.closest("[data-lid]");
+  if (!li) return;
+  const lid = li.dataset.lid, c = tray.list(S.view).find((x) => x.lid === lid);
+  if (!c) return;
+  if (b.dataset.a === "x") {
+    // just drop its id: the server sweeps a file no message names
+    const next = li.nextElementSibling?.querySelector("[data-a=x]") || li.previousElementSibling?.querySelector("[data-a=x]");
+    dropThumb(tray.remove(S.view, lid));
+    announce(`${c.paste ? "The pasted text" : c.name} removed.`);
+    trayRender();
+    (next && next.isConnected ? next : say).focus({ preventScroll: true });
+  } else if (b.dataset.a === "retry") tray.retry(S.view, lid);
+  else if (b.dataset.a === "view") VW.open(c.paste != null ? { name: c.name, bytes: c.size, local: c.paste } : { name: c.name, type: c.type, bytes: c.bytes ?? c.size, att: { chat: c.chat, id: c.id } }, b);
+  else if (b.dataset.a === "inline") { tray.remove(S.view, lid); insertText(c.paste); announce("The pasted text is back in the message."); }
+});
+say.addEventListener("paste", (e) => {
+  const cd = e.clipboardData;
+  if (!cd || !canAttach(S.view)) return;
+  const files = [...(cd.files || [])];
+  if (files.length) { e.preventDefault(); addFiles(files); return; }
+  const text = cd.getData("text/plain");
+  if (!text || !isLargePaste(text)) return;
+  const chat = attachChat(S.view);
+  if (!chat) return; // not connected yet: it goes in as text
+  e.preventDefault();
+  if (!tray.addPaste(S.view, chat, text)) { insertText(text); announce(`A message takes at most ${MAX_FILES} files, so the paste went in as text.`); return; }
+  announce("The long paste was added as a file. As text puts it back in the message.");
+  updateComposer();
+});
+// a drop anywhere on the page adds the files to the message being written
+{
+  const veil = $("#drop-veil");
+  $("#drop-ic").innerHTML = ICON.clip;
+  let depth = 0;
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+  const hide = () => { depth = 0; veil.hidden = true; };
+  addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (canAttach(S.view) && !document.querySelector(".sheet:not([hidden]), dialog[open]")) { depth++; veil.hidden = false; } });
+  addEventListener("dragover", (e) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = veil.hidden ? "none" : "copy"; });
+  addEventListener("dragleave", (e) => { if (hasFiles(e) && --depth <= 0) hide(); });
+  addEventListener("drop", (e) => { if (!hasFiles(e)) return; e.preventDefault(); const on = !veil.hidden; hide(); if (on) addFiles(e.dataTransfer.files); });
+  addEventListener("dragend", hide);
 }
 function growSay() {
   say.style.height = "auto";
@@ -1046,15 +1307,21 @@ function growSay() {
 }
 /** What would Stop stop here? The coordinator replying, or this thread's agent working. */
 function running() {
-  if (!DEMO) return null; // the backend has no stop route yet
-  if (S.typing[S.view]) return { kind: "coord", conv: S.view };
+  // a thread whose session works, or the coordinator of this chat while it works
+  // nothing more to stop where a Stop waits out its Undo or is on its way, or the session is stopping
+  const live = (run) => (run && !S.stops.has(run.session) && world.act.sessionState(run.session) !== "stopping" ? run : null);
   const t = convThread(S.view);
-  if (t && t.state === "working") return { kind: "thread", t };
-  return null;
+  if (t) return t.busy && t.sessionId ? live({ kind: "thread", t, session: t.sessionId }) : null;
+  if (S.view.startsWith("c:")) return CH.busy(S.view) ? live({ kind: "chat", session: S.view.slice(2) }) : null;
+  if (S.view === "chats") return null;
+  const chat = chatOf(S.view);
+  const sid = chat && world.act.coordinatorBusy ? world.act.coordinatorBusy(chat) : null;
+  return sid ? live({ kind: "coord", conv: S.view, session: sid }) : null;
 }
 function sendRender() {
   const btn = $("#send");
-  const empty = !say.value.replace(/(^|\s)@[\w.-]+/, "").trim();
+  const files = filesHere();
+  const empty = !say.value.replace(/(^|\s)@[\w.-]+/, "").trim() && !files.count;
   const run = empty ? running() : null;
   const mode = run ? "stop" : "send";
   if (btn.dataset.mode !== mode) {
@@ -1062,13 +1329,30 @@ function sendRender() {
     btn.innerHTML = run ? STOP_ICON : ICON.send;
     btn.classList.toggle("is-stop", !!run);
   }
-  btn.disabled = !run && (empty || !!liveBlock());
-  btn.setAttribute("aria-label", run ? (run.kind === "coord" ? "Stop the reply" : "Stop this run") : "Send");
-  btn.title = run ? (run.kind === "coord" ? "Stop the coordinator" : "Stop the agent (it keeps what's done)") : "Send (Enter)";
+  btn.disabled = !run && (empty || !!liveBlock() || files.busy || files.failed);
+  const wait = files.busy ? "Waiting for the files to upload" : files.failed ? "A file didn't upload: retry or remove it" : "";
+  btn.setAttribute("aria-label", run ? (run.kind === "coord" ? "Stop the reply" : "Stop this run") : wait ? `Send · ${wait}` : "Send");
+  btn.title = run ? (run.kind === "coord" ? "Stop the coordinator" : "Stop the agent (it keeps what's done)") : wait || "Send (Enter)";
+}
+/** A chat's line above the composer and its Send now toggle, which follow the chat's own state. */
+function chatTargetRender() {
+  sendNowRender();
+  if (!CH.isChats(S.view)) return false;
+  // an ended chat says so in its own words; "paused" would promise it comes back
+  const html = CH.blocked(S.view) ? CH.targetHtml(S.view) : liveBlock() ? `<span class="tg-warn">${ICON.pause}</span><span>Sending is paused · ${esc(liveBlock())}</span>` : CH.targetHtml(S.view);
+  if ($("#target")._h !== html) { $("#target").innerHTML = html; $("#target")._h = html; }
+  return true;
 }
 function updateComposer() {
-  const tg = DEMO ? null : targetOf(say.value, world.state.projects);
-  const pid = DEMO ? parseTarget(say.value) : tg.pid;
+  trayRender();
+  if (chatTargetRender()) {
+    syncPlaceholder();
+    $("#composer").classList.toggle("has-text", !!say.value);
+    sendRender(); growSay(); atList.hidden = true;
+    return;
+  }
+  const tg = targetOf(say.value, world.state.projects);
+  const pid = tg.pid;
   const t = convThread(S.view);
   const block = liveBlock();
   let html;
@@ -1080,8 +1364,7 @@ function updateComposer() {
   else if (S.view === "ws" || S.view === "home") html = `${ICON.arrow}<span>To the <b>Workspace</b> coordinator</span><span class="muted">· @ to aim at a project</span>`;
   else html = `${ICON.arrow}<span>To the <b>${esc(PROJ(convProject(S.view)))}</b> coordinator</span>`;
   if ($("#target")._h !== html) { $("#target").innerHTML = html; $("#target")._h = html; }
-  say.placeholder = t ? "Reply to the agent…" : S.view === "home" ? (PHONE.matches ? "What should get done?" : "What should get done? Use @project to aim it") : S.view === "ws" ? "Ask anything across your projects…" : `Message ${PROJ(convProject(S.view))}…`;
-  $("#say-label").textContent = say.placeholder;
+  syncPlaceholder();
   $("#composer").classList.toggle("has-text", !!say.value);
   sendRender();
   growSay();
@@ -1094,11 +1377,18 @@ function updateComposer() {
   atList._sel = Math.min(atList._sel || 0, opts.length - 1);
   atList.innerHTML = opts.map((p, i) => {
     const w = world.state.threads.filter((x) => x.project === p.id && isBusy(x)).length;
-    return `<li role="option" id="at-${i}" data-pid="${esc(p.id)}" aria-selected="${i === atList._sel}">@${esc(p.id)}<span class="at-s">${w ? `${w} working` : "quiet"}</span></li>`;
+    return `<li role="option" id="at-${i}" data-pid="${esc(p.id)}" aria-selected="${i === atList._sel}"><span class="at-ic" aria-hidden="true">${ICON.project}</span>@${esc(p.id)}<span class="at-s">${w ? `${w} working` : "quiet"}</span></li>`;
   }).join("");
   atList.hidden = false;
   say.setAttribute("aria-expanded", "true");
   say.setAttribute("aria-activedescendant", `at-${atList._sel}`);
+}
+/** The composer's placeholder follows the view, and a resolved thread says a reply reopens it. */
+function syncPlaceholder() {
+  if (CH.isChats(S.view)) { const ph = CH.placeholder(S.view); if (say.placeholder !== ph) { say.placeholder = ph; $("#say-label").textContent = ph; } return; }
+  const t = convThread(S.view);
+  const ph = t ? (t.state === "resolved" ? "Reply to reopen it…" : "Reply to the agent…") : S.view === "home" ? (PHONE.matches ? "What should get done?" : "What should get done? Use @project to aim it") : S.view === "ws" ? "Ask anything across your projects…" : `Message ${PROJ(convProject(S.view))}…`;
+  if (say.placeholder !== ph) { say.placeholder = ph; $("#say-label").textContent = ph; }
 }
 function pickAt(pid) {
   const pos = say.selectionStart;
@@ -1126,44 +1416,103 @@ say.addEventListener("keydown", (e) => {
     }
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); atList.hidden = true; return; }
   }
-  // M opens the intelligence popover while the composer is empty (or ⌘. anywhere)
-  if ((e.key === "m" || e.key === "M") && !say.value && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); IQ.open(sessionOf(S.view), $("#iq")); return; }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); say.blur(); }
 });
 atList.addEventListener("mousedown", (e) => { const li = e.target.closest("li"); if (li) { e.preventDefault(); pickAt(li.dataset.pid); } });
+// On Home an empty composer shrinks when it loses focus, which drops the dock (and the herald just above it)
+// 45 px under the pointer, so the click lands on nothing. Keep its shape from the press until the click.
+{
+  const comp = $("#composer");
+  let timer = 0;
+  const release = (ms) => { clearTimeout(timer); timer = setTimeout(() => comp.classList.remove("held"), ms); };
+  document.addEventListener("pointerdown", (e) => {
+    if (!comp.contains(document.activeElement) || comp.contains(e.target)) return;
+    clearTimeout(timer);
+    comp.classList.add("held");
+  }, true);
+  // a touch's click can come a moment after the finger lifts, so wait for it (or give up shortly after)
+  document.addEventListener("pointerup", () => { if (comp.classList.contains("held")) release(600); }, true);
+  document.addEventListener("pointercancel", () => { if (comp.classList.contains("held")) release(0); }, true);
+  document.addEventListener("click", () => { if (comp.classList.contains("held")) release(0); }, true);
+}
 $("#composer").addEventListener("submit", (e) => { e.preventDefault(); if ($("#send").dataset.mode === "stop") stopRun(); else send(); });
 $("#target").addEventListener("click", () => {
+  if (S.view === "chats") { CH.openSetup($("#target")); return; }
+  if (S.view.startsWith("c:")) { say.focus(); return; }
   if (!/(^|\s)@/.test(say.value)) say.value = "@" + (say.value ? " " + say.value : "");
   say.focus(); say.setSelectionRange(1, 1); updateComposer();
 });
+/** "Send now": its own toggle, shown in a chat whose turn is running where the agent can be interrupted. */
+function sendNowRender() {
+  const b = $("#send-now");
+  const st = CH.isChats(S.view) && !liveBlock() ? CH.nowState(S.view) : null;
+  b.hidden = !st;
+  if (st) { b.setAttribute("aria-pressed", String(st.on)); b.classList.toggle("is-on", st.on); }
+}
+$("#send-now").addEventListener("click", () => { CH.toggleNow(S.view); updateComposer(); say.focus(); });
 $("#iq").addEventListener("click", () => { if (IQ.isOpen) IQ.close(); else IQ.open(sessionOf(S.view), $("#iq")); });
+
+/**
+ * Live Stop: nothing is sent for 3 s (Undo), then the session's turn and its sub-agents stop at once
+ * (POST /api/chat/abort). The turn's own record then says what ran: "Stopped after …".
+ */
+function stopLive(run) {
+  const what = run.kind === "thread" ? run.t.title : run.kind === "chat" ? "This chat" : run.conv === "ws" ? "The coordinator" : `${PROJ(chatOf(run.conv))} coordinator`;
+  // the turn you chose to stop: if it ends inside the window and another starts, that one is left alone
+  const token = { session: run.session, turn: world.act.turnOf(run.session), what, until: Date.now() + Kit.COMMIT_MS, cancelled: false, sent: false };
+  S.stops.set(run.session, token);
+  stopsHerald();
+  announce(`Stopping ${what} in 3 seconds. Undo to keep it working.`);
+  sound.play("back");
+  schedule();
+  setTimeout(async () => {
+    if (token.cancelled) return;
+    token.sent = true;
+    stopsHerald();
+    const now = world.act.turnOf(token.session);
+    if (token.turn && now !== token.turn) {
+      S.stops.delete(token.session);
+      heraldShow({ kind: "halt", text: "It had already finished", sub: now ? `${what} · its next turn goes on` : what }, 4200);
+      announce(now ? "It had already finished that turn. The next one goes on; Stop again to end it." : "It had already finished.");
+      schedule();
+      return;
+    }
+    try {
+      const r = await world.act.stop(token.session);
+      heraldShow({ kind: "halt", text: r && r.stopped === false ? "It had already finished" : "Stopped", sub: r && r.stopped === false ? what : `${what} · what it did is kept` }, 4200);
+      announce(r && r.stopped === false ? "It had already finished." : `Stopped ${what}. What it did is kept.`);
+    } catch (err) {
+      // Retry stops the same session, wherever you are when you press it
+      heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: `${what} · ${err.message}`, undo: () => stopLive(run), undoLabel: "Retry" }, 7000);
+    } finally {
+      if (S.stops.get(token.session) === token) S.stops.delete(token.session);
+      schedule();
+    }
+  }, Kit.COMMIT_MS);
+}
+/**
+ * One line for every stop still in its Undo window, a turn's (S.stops) or a sub-agent's (pendingStops),
+ * with one Undo for all: a second stop never hides the first one's Undo.
+ */
+function stopsHerald() {
+  const turns = [...S.stops.values()].filter((x) => !x.cancelled && !x.sent);
+  const runs = pendingStops.filter((j) => !j.cancelled && !j.sent);
+  const all = [...turns, ...runs];
+  if (!all.length) { if (S.herald && S.herald.tag === "stops") { S.herald.until = 0; heraldNext(); } return; }
+  const last = Math.max(...all.map((x) => x.until));
+  heraldShow({ kind: "halt", tag: "stops", text: "Stopping", sub: all.map((x) => x.what).join(", "), undo: () => {
+    for (const x of turns) { x.cancelled = true; if (S.stops.get(x.session) === x) S.stops.delete(x.session); }
+    for (const j of runs) { j.cancelled = true; const i = pendingStops.indexOf(j); if (i >= 0) pendingStops.splice(i, 1); }
+    announce(all.length > 1 ? "Not stopped. They keep working." : "Not stopped. It keeps working.");
+    schedule();
+  } }, Math.max(300, last - Date.now()));
+}
 
 /** Stop: the run halts honestly; what's done is kept and said so. */
 function stopRun() {
   const run = running();
-  if (!run) return;
-  if (run.kind === "coord") {
-    S.stopped[run.conv] = true;
-    delete S.typing[run.conv];
-    heraldShow({ kind: "halt", text: "Stopped", sub: "nothing was started" }, 3600);
-    announce("Stopped. The coordinator didn't start anything.");
-  } else {
-    const t = run.t;
-    const cur = t.checklist.items.find((i) => i.state === "doing") || t.checklist.items.find((i) => i.state === "todo");
-    const at = Date.now();
-    t.state = "needs_reply";
-    t.asks = [{ id: `stop_${t.id}_${at}`, kind: "question", title: `You stopped it at “${cur ? cur.text : "this step"}”. Continue, or end here?`, detail: `${t.checklist.done} of ${t.checklist.total} steps are done and kept.`, risk: "routine", options: ["Continue", "Stop here"], stopByYou: true }];
-    t.needsYou = t.asks[0].title;
-    t.checklist = { ...t.checklist, items: t.checklist.items.map((i) => (i.state === "doing" ? { ...i, state: "todo" } : i)), doing: 0 };
-    t.messages.push({ id: `stopm_${at}`, at, who: "agent", text: `Stopped by you. Nothing after “${cur ? cur.text : "the last step"}” ran; ${t.checklist.done} of ${t.checklist.total} steps are kept.`, stopLine: true });
-    t.lastAt = at;
-    waitSince.set(t.id, at);
-    heraldShow({ kind: "halt", text: "Stopped", sub: `${t.checklist.done} of ${t.checklist.total} steps kept` }, 3600);
-    announce(`Stopped. ${t.checklist.done} of ${t.checklist.total} steps are kept. Continue or end it below.`);
-  }
-  sound.play("back");
-  schedule();
+  if (run) stopLive(run);
 }
 
 function lift(el, from) {
@@ -1173,15 +1522,12 @@ function lift(el, from) {
   b.animate([{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(.98)`, opacity: 0.55 }, { transform: "none", opacity: 1 }], { duration: 320, easing: "cubic-bezier(.2,.9,.25,1.06)" });
 }
 
-/** Live: why sending is paused right now, or "" (classic composerBlock, in plain words). */
+/** Why sending is paused right now, or "" (classic composerBlock, in plain words). */
 function liveBlock() {
-  if (DEMO) return "";
-  const st = world.state;
-  if (st.statusError || st.error) return "Can't reach XO right now";
-  if (!st.status) return "Connecting to XO…";
-  if (!st.status.supported) return `The ${st.status.agent || "current"} backend has no projects chat`;
-  if (!st.status.enabled) return "The router is off (XO_ROUTER_MODE=off)";
-  return "";
+  if (CH.isChats(S.view)) return CH.blocked(S.view) || sendBlock(world.state, { timeline: false });
+  const t = convThread(S.view);
+  const toThread = !!t && !/(^|\s)@[\w.-]+/.test(say.value);
+  return sendBlock(world.state, { timeline: !toThread });
 }
 
 function sendLive(raw) {
@@ -1190,14 +1536,19 @@ function sendLive(raw) {
   const tg = targetOf(raw, world.state.projects);
   if (tg.unknown) { heraldShow({ kind: "stopped", text: `No project called “${tg.unknown}”`, sub: "pick one from the @ list" }, 4600); announce(`There's no project called ${tg.unknown}. Nothing was sent.`); return; }
   const text = stripTarget(raw, tg.token);
-  if (!text) return;
+  const files = filesHere();
+  if (!text && !files.count) return;
+  if (files.busy) { announce("Not sent yet: waiting for the files to upload."); return; }
+  if (files.failed) { announce("Not sent: a file didn't upload. Retry or remove it first."); return; }
   const t = convThread(S.view);
   const thread = t && !tg.pid ? t : null;
   const chat = thread ? t.project : tg.pid || chatOf(S.view) || "workspace";
   const conv = thread ? S.view : convOfChat(chat);
   const here = conv === S.view;
   const from = say.getBoundingClientRect();
-  const m = { id: `l${++S.n}_${Date.now().toString(36)}`, conv, at: Date.now(), who: "you", text, status: "sending", target: thread ? null : chat };
+  // client_id: a retry of this exact message is the same request, so the server stores it once (UI-reference §0.7)
+  const m = { id: `l${++S.n}_${Date.now().toString(36)}`, conv, at: Date.now(), who: "you", text, status: "sending", target: thread ? null : chat, cid: `ui_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}` };
+  if (files.count) { m.files = tray.take(S.view); m.files.forEach(dropThumb); }
   (S.local[conv] = S.local[conv] || []).push(m);
   say.value = ""; saveDraft(); updateComposer();
   const btn = $("#send"); btn.classList.remove("fired"); void btn.offsetWidth; btn.classList.add("fired");
@@ -1207,90 +1558,63 @@ function sendLive(raw) {
   deliverLive(m, thread);
 }
 
-/** Live: the server's row replaces the optimistic one (same bubble, never twice); errors keep the text. */
+/** The server's row replaces the optimistic one (same bubble, never twice); errors keep the text. */
 async function deliverLive(m, thread) {
   m.status = "sending"; delete m.err;
   try {
-    const row = thread ? await world.act.reply(thread.id, m.text) : await world.act.ask(m.target || "workspace", m.text);
+    const row = await postWithFiles(m, thread);
     if (row && row.id) { S.alias.set(row.id, m.id); m.merged = true; }
     m.status = "sent";
     announce(thread ? "Sent to the thread." : `Sent to ${m.target === "workspace" ? "the coordinator" : PROJ(m.target)}.`);
   } catch (err) {
     m.status = "failed";
-    m.err = { title: sendErrorTitle(err), text: err.message || "" };
+    m.err = { title: err.fileErr ? `A file didn't upload: ${uploadErrorText(err)}` : err.code === "unknown_attachment" ? "A file is no longer on the server" : sendErrorTitle(err), text: err.message || "" };
     announce(`${m.err.title}. ${m.err.text} Your message is kept; retry or edit it.`);
     if (S.view !== m.conv) heraldShow({ kind: "stopped", text: m.err.title, sub: "open the conversation to retry", open: m.conv }, 6000);
   }
   schedule();
 }
 
-function send() {
-  const raw = say.value;
-  if (!DEMO) { sendLive(raw); return; }
-  const pid = parseTarget(raw);
-  const text = raw.replace(/(^|\s)@[\w.-]+\s?/, "$1").trim();
-  if (!text) return;
-  const fromHome = S.view === "home";
-  const conv = fromHome ? (pid ? "p:" + pid : "ws") : S.view;
-  const t = convThread(conv);
-  const from = say.getBoundingClientRect();
-  const m = { id: `l${++S.n}_${Date.now().toString(36)}`, conv, at: Date.now(), who: "you", text, status: "sending", target: pid || (t ? null : convProject(conv)) };
-  (S.local[conv] = S.local[conv] || []).push(m);
-  say.value = ""; saveDraft(); updateComposer();
-  const btn = $("#send"); btn.classList.remove("fired"); void btn.offsetWidth; btn.classList.add("fired");
-  sound.play("send");
-  if (fromHome) heraldShow({ kind: "sent", text: `Sent to ${m.target === "workspace" ? "the coordinator" : PROJ(m.target)}`, sub: "waiting for a thread" }, 9000);
-  else { render(); toBottom(false); lift(msgsEl.querySelector(`[data-k="${m.id}"]`), from); }
-  deliver(m, t && !pid ? t : null, fromHome);
+/**
+ * Post a message with its files. Each file is uploaded to the chat the message goes to (a message
+ * aimed elsewhere with @project takes its files along). If the server no longer knows one (an upload
+ * no message named is swept after a day), the same bytes go up again, once.
+ */
+async function postWithFiles(m, thread) {
+  const project = thread ? thread.project : m.target || "workspace";
+  const postIt = (attachments) => (thread
+    ? world.act.reply(thread.id, m.text, { clientId: m.cid, attachments })
+    : world.act.ask(project, m.text, { clientId: m.cid, attachments }));
+  if (!m.files || !m.files.length) return postIt();
+  const chat = world.act.chatId?.(project);
+  const up = (opts) => tray.ensure(m.files, chat, opts).catch((err) => { throw Object.assign(err, { fileErr: true }); });
+  try {
+    return await postIt(await up());
+  } catch (err) {
+    if (err.code !== "unknown_attachment") throw err;
+    return postIt(await up({ again: true }));
+  }
 }
 
-async function deliver(m, thread, fromHome) {
-  if (!DEMO) return deliverLive(m, thread);
-  const conv = m.conv;
-  if (DEMO) await wait(360);
-  if (DEMO && /#fail\b/i.test(m.text)) { m.status = "failed"; schedule(); announce("Message not sent. Retry or edit."); if (fromHome) heraldShow({ kind: "stopped", text: "Not sent", sub: "open the conversation to retry", open: conv }, 6000); return; }
-  if (thread) {
-    try {
-      await world.act.reply(thread.id, m.text);
-      const mine = [...thread.messages].reverse().find((x) => x.who === "you" && x.text === m.text);
-      if (mine) { S.alias.set(mine.id, m.id); m.merged = true; }
-      m.status = "sent";
-    } catch { m.status = "failed"; }
-    schedule();
+function send() {
+  const raw = say.value;
+  if (CH.isChats(S.view)) {
+    const text = raw.trim();
+    if (!text || liveBlock()) return;
+    say.value = ""; saveDraft(); updateComposer();
+    sound.play("send");
+    CH.send(S.view, text);
     return;
   }
-  m.status = "sent"; m.waiting = true; S.typing[conv] = Date.now(); delete S.stopped[conv];
-  const setup = IQ.routed(conv, m.text);
-  schedule();
-  announce(`Sent to ${m.target === "workspace" ? "the coordinator" : PROJ(m.target)}. Waiting for a thread.`);
-  if (DEMO) await wait(2600);
-  if (S.stopped[conv]) {
-    m.waiting = false; delete S.stopped[conv];
-    (S.local[conv] = S.local[conv] || []).push({ id: `l${++S.n}_x`, conv, at: Date.now(), who: "coord", text: "Stopped. I didn't start anything; your message is kept above if you want to send it again.", iq: setup });
-    schedule();
-    return;
-  }
-  try {
-    const nt = await world.act.ask(m.target || "workspace", m.text);
-    m.waiting = false; delete S.typing[conv];
-    if (nt && nt.id) {
-      m.threadId = nt.id;
-      S.localThread.set(nt.id, conv);
-      const here = conv === "p:" + nt.project;
-      const spawn = IQ.spawnSetup(nt.id);
-      (S.local[conv] = S.local[conv] || []).push({ id: `l${++S.n}_r`, conv, at: Date.now(), who: "coord", text: (here ? "On it. I started a thread for this." : `Routed to **${PROJ(nt.project)}**. A thread is on it.`) + ` The router chose ${spawn.name} ${spawn.pips} for it.`, threadId: nt.id, iq: setup });
-      announce(`Started a thread in ${PROJ(nt.project)}: ${nt.title}`);
-      if (fromHome || S.view !== conv) heraldShow({ kind: "started", text: `Thread started: ${nt.title}`, sub: PROJ(nt.project), open: "t:" + nt.id }, 7000);
-    }
-  } catch { m.waiting = false; delete S.typing[conv]; m.status = "failed"; }
-  schedule();
+  sendLive(raw);
 }
+
 function retry(id) {
   for (const list of Object.values(S.local)) {
     const m = list.find((x) => x.id === id);
     if (m) {
-      if (!DEMO && liveBlock()) { announce(`Not sent: ${liveBlock()}.`); return; }
-      m.status = "sending"; if (DEMO) m.text = m.text.replace(/\s*#fail\b/i, ""); schedule(); deliver(m, convThread(m.conv) && !m.target ? convThread(m.conv) : null); return;
+      if (liveBlock()) { announce(`Not sent: ${liveBlock()}.`); return; }
+      m.status = "sending"; schedule(); deliverLive(m, convThread(m.conv) && !m.target ? convThread(m.conv) : null); return;
     }
   }
 }
@@ -1299,25 +1623,27 @@ function editFailed(id) {
   const i = list.findIndex((x) => x.id === id);
   if (i < 0) return;
   const [m] = list.splice(i, 1);
+  if (m.files && m.files.length) tray.restore(S.view, m.files);
   say.value = (m.target && m.target !== convProject(S.view) ? `@${m.target} ` : "") + m.text;
   updateComposer(); render(); say.focus();
 }
 
 // ── render ──────────────────────────────────────────────────────────────────
 const scroller = $("#scroller"), msgsEl = $("#msgs");
+// the oldest message on screen; day lines don't count, since older messages of the same day land below theirs
+const FIRST_MSG = "[data-k]:not([data-k=hist]):not([data-k=note]):not([data-k^='day|'])";
 let rendered = null, raf = 0;
 function schedule() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); }
 const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
 function toBottom(smooth) { scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth && !RM.matches ? "smooth" : "auto" }); }
 
 function render() {
-  if (!world.state.loaded || S.booting) return;
+  if (!world.state.loaded) return;
   const needs = D.needItems();
   pings(needs);
   const v = S.view;
   const isHome = v === "home";
-  $("#app").dataset.view = isHome ? "home" : v === "ws" ? "ws" : v.startsWith("t:") ? "thread" : "project";
-  document.body.classList.toggle("sealed", sealed());
+  $("#app").dataset.view = isHome ? "home" : v === "ws" ? "ws" : v.startsWith("t:") || v.startsWith("c:") ? "thread" : "project";
   $("#home").hidden = !isHome;
   $("#conv").hidden = isHome;
   const pbt = isHome ? "Home" : "";
@@ -1328,44 +1654,52 @@ function render() {
     topRender(needs);
     wsHeadRender(needs);
     let switching = rendered !== v;
-    if (!DEMO) {
-      // live: the first real fill of a conversation lands quietly and in place, like a view switch
-      const ready = liveReady(v);
-      if (!switching && ready && S.filled !== v) switching = true;
-      S.filled = ready ? v : null;
-    }
+    // the first real fill of a conversation lands quietly and in place, like a view switch
+    const ready = liveReady(v);
+    if (!switching && ready && S.filled !== v) switching = true;
+    S.filled = ready ? v : null;
     const atBottom = switching || nearBottom();
-    const first0 = msgsEl.querySelector("[data-k]:not([data-k=hist]):not([data-k=note])")?.dataset.k;
+    const first0 = msgsEl.querySelector(FIRST_MSG)?.dataset.k;
     const h0 = scroller.scrollHeight, top0 = scroller.scrollTop;
     const added = reconcile(msgsEl, msgItems(v, needs), { quiet: switching });
-    if (!DEMO && !switching && !atBottom && first0 && msgsEl.querySelector("[data-k]:not([data-k=hist]):not([data-k=note])")?.dataset.k !== first0) {
+    if (!switching && !atBottom && first0 && msgsEl.querySelector(FIRST_MSG)?.dataset.k !== first0) {
       // older messages arrived above: keep what you were reading exactly where it was
       scroller.scrollTop = top0 + (scroller.scrollHeight - h0);
     }
-    if (!DEMO) ensureRoot();
+    ensureRoot();
     const typed = typingRender();
     if (switching) {
       rendered = v;
       stuck = true;
       const pos = S.scroll[v];
-      if (v === "ws" && pos == null) { scroller.scrollTop = 0; stuck = false; }
-      else if (pos == null || pos === "bottom") toBottom(false); else scroller.scrollTop = pos;
+      if (pos == null || pos === "bottom") toBottom(false); else scroller.scrollTop = pos;
       $("#new-below").hidden = true;
     } else if (added.length || typed) {
       if (atBottom) toBottom(true); else if (added.length) $("#new-below").hidden = false;
     }
   }
+  if (!isHome) requestAnimationFrame(loadAhead);
   dockRender(needs);
   heraldRender(needs);
+  chatTargetRender();
+  syncPlaceholder();
   sendRender();
   chipRender();
   D.sync();
-  const nd = sealed() ? 0 : needs.filter((n) => n.admitted && !n.later).length;
-  document.title = sealed() ? "Sealed · Converged" : Kit.titleFor(nd, "Converged");
+  const nd = needs.filter((n) => n.admitted && !n.later).length;
+  document.title = Kit.titleFor(nd, "XO Space");
+}
+/** Earlier messages load before you reach them (hub #28). Within about a screen of the top, the next
+ *  page is fetched, and it lands above what you're reading without moving it; a first page too short to
+ *  scroll keeps loading until it fills the view or the conversation begins. */
+function loadAhead() {
+  if (rendered !== S.view || S.view === "home" || convThread(S.view) || CH.isChats(S.view)) return;
+  if (scroller.scrollTop > Math.max(600, scroller.clientHeight)) return;
+  const c = chatOf(S.view); const h = c && world.state.hist[c];
+  if (h && h.loaded && !h.all && !h.loading && !h.olderError) world.act.loadOlder(c);
 }
 scroller.addEventListener("scroll", () => {
-  // live: reaching the top loads earlier messages (the API's newest-N window grows: 40, 80, 160…)
-  if (!DEMO && scroller.scrollTop < 80 && rendered === S.view && !convThread(S.view)) { const c = chatOf(S.view); const h = c && world.state.hist[c]; if (h && !h.all && !h.loading && !h.error) world.act.loadOlder(c); }
+  loadAhead();
   if (nearBottom()) $("#new-below").hidden = true;
   $("#top").classList.toggle("is-scrolled", scroller.scrollTop > 120);
 }, { passive: true });
@@ -1384,11 +1718,14 @@ function saveScroll() {
 }
 function go(v, { from, focus = false } = {}) {
   if (!v) return;
+  // an edit or menu in a thread's header belongs to that visit
+  S.tEdit = null; S.tMenu = null;
+  // the file viewer belongs to the conversation it was opened from
+  if (v !== S.view) VW.close({ restore: false });
+  closeSettings({ restore: false });
   setDrawer(false);
   IQ.close({ restore: false });
   if (v === S.view) { if (focus) say.focus(); return; }
-  // the morning recap is for the first visit: leaving Home folds it
-  if (S.view === "home" && S.morningOpen) { S.morningOpen = false; if (NIGHT.phase === "morning") NIGHT.phase = "day"; }
   const a = document.activeElement;
   const opener = a && a.closest?.("[data-k], .nw");
   if (opener && (opener.closest("#msgs") || opener.closest("#now-wrap"))) S.opener[S.view] = opener.dataset.k || opener.dataset.go;
@@ -1398,7 +1735,7 @@ function go(v, { from, focus = false } = {}) {
   const back = from && from.startsWith("t:");
   S.view = v;
   follow();
-  TD.key = null; tdock.innerHTML = "";
+  TD.key = null; tdock.innerHTML = ""; tdock._ch = "";
   const el = v === "home" ? $("#home") : $("#column");
   el.classList.remove("enter-r", "enter-l", "enter");
   void el.offsetWidth;
@@ -1412,24 +1749,33 @@ function go(v, { from, focus = false } = {}) {
   else if (back && target) target.focus({ preventScroll: true });
   else if (!$("#panel").contains(document.activeElement)) (v === "home" ? $("#home") : scroller).focus({ preventScroll: true });
 }
-/** Live: has this conversation's real content arrived (timeline or thread detail)? */
+/** Has this conversation's real content arrived (timeline or thread detail)? */
 function liveReady(v) {
   const t = convThread(v);
   if (t) return t.loaded;
   const h = world.state.hist[chatOf(v)];
   return !!h && !(h.loading && !(world.state.timeline[chatOf(v)] || []).length);
 }
-/** Live: stream the open conversation (the Workspace on Home); poll an open thread's detail. */
+/** Stream the open conversation (the Workspace on Home); poll an open thread's detail. */
 function follow() {
-  if (DEMO) return;
   const v = S.view, t = convThread(v);
+  if (CH.isChats(v)) { world.act.watch([]); world.act.watchThread(null); world.act.watchSession?.(v.startsWith("c:") ? v.slice(2) : null); CH.open(v); return; }
+  world.act.watchSession?.(null);
+  // a thread's hops are always read: a message relayed into it shows in place (if1 #7); their lines stay by choice
+  if (t && world.act.loadHops) world.act.loadHops(t.id);
+  if (S.showHops && !t) loadChatHops(v);
   world.act.watch(v === "home" || v === "ws" ? ["workspace"] : v.startsWith("p:") ? [v.slice(2)] : t ? [t.project] : []);
   world.act.watchThread(t ? t.id : null);
 }
-/** Live: an open thread's root request lives on the project timeline; page back until it's there. */
+/** "Show hops" on the Workspace or a project: read that chat's own hops once. */
+function loadChatHops(v) {
+  const chat = v === "ws" || v === "home" ? "workspace" : v.startsWith("p:") ? v.slice(2) : null;
+  if (chat && world.act.loadChatHops) world.act.loadChatHops(chat);
+}
+/** An open thread's root request lives on the project timeline; page back until it's there. */
 function ensureRoot() {
   const t = convThread(S.view);
-  if (DEMO || !t) return;
+  if (!t) return;
   const h = world.state.hist[t.project], tl = world.state.timeline[t.project];
   if (!h || !tl || h.loading || h.all || h.error || tl.some((r) => r.id === t.id)) return;
   S.rootTries = S.rootTries || {};
@@ -1438,6 +1784,7 @@ function ensureRoot() {
 }
 function back() {
   const v = S.view;
+  if (v.startsWith("c:")) { go("chats", { from: "t:" }); return; }
   if (v.startsWith("t:")) go(S.parent[v] || "p:" + convThread(v)?.project, { from: v });
 }
 $("#top-back").addEventListener("click", back);
@@ -1456,17 +1803,112 @@ function decideKey(key, opts) {
   D.open(key, opts);
 }
 
+/** After going to a conversation, bring one message into view and mark it for a moment (if it's loaded). */
+function showMsg(id) {
+  let tries = 0;
+  const look = () => {
+    const el = msgsEl.querySelector(`[data-k="${CSS.escape(S.alias.get(id) || id)}"]`);
+    if (!el) { if (++tries < 20) setTimeout(look, 100); return; }
+    el.scrollIntoView({ block: "center", behavior: RM.matches ? "auto" : "smooth" });
+    el.classList.remove("is-flash"); void el.offsetWidth; el.classList.add("is-flash");
+    setTimeout(() => el.classList.remove("is-flash"), 1800);
+  };
+  setTimeout(look, 120); // after the conversation has drawn and restored its scroll
+}
+
+// ── files on messages (hub #30): the shared-file card, opening in the same viewer ──
+/** The project a forwarded copy came from, when it wasn't the Workspace's own message (else null). */
+function fwdSource(fwd) {
+  const p = fwd.chatId && world.act.projectOf ? world.act.projectOf(fwd.chatId) : null;
+  if (p) return p === "workspace" ? null : p;
+  const v = fwd.via || [];
+  return v.length > 1 && v[0] !== "workspace" && v[0] !== "project" && world.project(v[0]) ? v[0] : null;
+}
+/** A message's files as cards: each opens in the viewer, read through `chatId` (the message's own chat). */
+function filesHtml(files, chatId) {
+  return `<ul class="tb-fl m-files" aria-label="Files">${files.map((f) => {
+    const chat = f.chat || chatId, can = !!(f.id && chat);
+    const img = kindOf(f.type || "") === "image";
+    const ic = img && can ? `<img src="${esc(attachmentUrl(chat, f.id))}" alt="" loading="lazy" decoding="async">` : img ? ICON.image : ICON.doc;
+    const meta = [f.type ? typeWord(f.type, f.name) : "", fmtSize(f.bytes ?? f.size)].filter(Boolean).join(" · ");
+    const attrs = can ? `data-att="${esc(f.id)}" data-att-chat="${esc(chat)}" data-att-name="${esc(f.name)}" data-att-type="${esc(f.type || "")}" data-att-bytes="${esc(f.bytes ?? "")}" aria-label="Open ${esc(f.name)}"` : "disabled";
+    return `<li class="tb-file"><button type="button" class="tb-fb${img && can ? " is-img" : ""}" ${attrs} title="${esc(f.name)}"><span class="tb-fi">${ic}</span><span class="tb-ft"><span class="tb-fn">${esc(f.name)}</span><span class="tb-fm">${esc(meta)}</span></span>${can ? `<span class="tb-fo" aria-hidden="true">Open${ICON.chevron}</span>` : ""}</button></li>`;
+  }).join("")}</ul>`;
+}
+function openAttachment(btn) {
+  const d = btn.dataset;
+  VW.open({ name: d.attName, type: d.attType, bytes: d.attBytes === "" ? null : Number(d.attBytes), att: { chat: d.attChat, id: d.att } }, btn);
+}
+
+// ── shared files: open in the viewer beside the conversation (if1 #2) ──
+function openSharedFile(btn) {
+  const f = { path: btn.dataset.file, name: btn.dataset.fileName, type: btn.dataset.fileType, bytes: btn.dataset.fileBytes === "" ? null : Number(btn.dataset.fileBytes) };
+  const t = convThread(S.view);
+  // only a thread's own folder maps to a project route; a plain chat's files have none yet
+  const route = sharedFileRoute(t, f.path);
+  VW.open({ ...f, ...route }, btn);
+}
+
+// ── a thread's own header: resolve and reopen with Undo (R1), rename, label ──
+async function resolveThread(tid, resolved, { undo = true } = {}) {
+  const t = world.thread(tid);
+  if (!t) return;
+  const name = t.title;
+  try {
+    await world.act.resolve(tid, resolved);
+    announce(resolved ? `Resolved ${name}.` : `Reopened ${name}.`);
+    // Undo is the same call the other way (the route is idempotent); it never starts or stops a turn
+    if (undo) heraldShow({ kind: "done", text: resolved ? "Resolved" : "Reopened", sub: name, undo: () => resolveThread(tid, !resolved, { undo: false }) }, 6000);
+  } catch (err) {
+    heraldShow({ kind: "stopped", text: resolved ? "Couldn't resolve it" : "Couldn't reopen it", sub: err.message, undo: () => resolveThread(tid, resolved, { undo }), undoLabel: "Retry" }, 8000);
+  }
+}
+function startThreadEdit(tid, field) {
+  S.tEdit = { tid, field };
+  $("#top-who")._h = null;
+  render();
+  const inp = $("#tw-edit");
+  if (inp) { inp.focus(); inp.select(); }
+}
+async function saveThreadField(tid, field, value) {
+  S.tEdit = null;
+  $("#top-who")._h = null;
+  const t = world.thread(tid);
+  if (!t) { render(); return; }
+  const v = String(value || "").trim();
+  if (field === "title" && (!v || v === t.title)) { render(); return; }
+  if (field === "label" && v === (t.label || "")) { render(); return; }
+  render();
+  try {
+    await world.act.editThread(tid, field === "title" ? { title: v.slice(0, 120) } : { label: v ? v.slice(0, 32) : null });
+    announce(field === "title" ? `Renamed to ${v}.` : v ? `Labelled ${v}.` : "Label removed.");
+  } catch (err) {
+    heraldShow({ kind: "stopped", text: field === "title" ? "Couldn't rename it" : "Couldn't change the label", sub: err.message }, 6000);
+  }
+}
+$("#top").addEventListener("keydown", (e) => {
+  const inp = e.target.closest?.("[data-tedit]");
+  if (inp) {
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); saveThreadField(S.tEdit?.tid, inp.dataset.tedit, inp.value); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); S.tEdit = null; $("#top-who")._h = null; render(); $("#conv-title")?.focus?.(); }
+    return;
+  }
+  if (e.key === "Escape" && S.tMenu) { e.preventDefault(); e.stopPropagation(); S.tMenu = null; $("#top-who")._h = null; render(); $("[data-tmenu]")?.focus(); }
+});
+$("#top").addEventListener("focusout", (e) => {
+  const inp = e.target.closest?.("[data-tedit]");
+  if (inp && S.tEdit) setTimeout(() => { if (S.tEdit && inp.isConnected && document.activeElement !== inp) saveThreadField(S.tEdit.tid, inp.dataset.tedit, inp.value); }, 0);
+});
+
 // ── clicks ──────────────────────────────────────────────────────────────────
 document.addEventListener("click", (e) => {
   const t = e.target;
-  if (t.closest(".uxc") || t.closest("#iq-pop")) return;
+  if (t.closest("#iq-pop")) return;
   const g = t.closest("[data-go]");
-  if (g && !t.closest("#all")) { e.preventDefault(); go(g.dataset.go); return; }
+  if (g && !t.closest("#all")) { e.preventDefault(); go(g.dataset.go); if (g.dataset.goMsg) showMsg(g.dataset.goMsg); return; }
   const tl = t.closest("a[data-thread]");
   if (tl) { e.preventDefault(); if (world.thread(tl.dataset.thread)) go("t:" + tl.dataset.thread); else heraldShow({ kind: "calm", text: "That thread isn't loaded", sub: "it may be in another project" }, 3200); return; }
   if (t.closest("[data-older]")) { const c = chatOf(S.view); if (c) world.act.loadOlder(c); return; }
-  const rl = t.closest("[data-rule]");
-  if (rl) { decideKey(rl.dataset.rule, { teach: "prefix" }); return; }
   const d = t.closest("[data-decide]");
   if (d) { decideKey(d.dataset.decide); return; }
   if (t.closest("[data-next]")) { openNext(); return; }
@@ -1478,24 +1920,36 @@ document.addEventListener("click", (e) => {
   if (l) { D.laterNow(l.dataset.later); S.pin = null; return; }
   if (t.closest("[data-bring]")) { S.later.clear(); announce("Brought back. They're in today's list again."); schedule(); return; }
   if (t.closest("[data-handled]")) { setHandled(!S.handledOpen); return; }
-  if (t.closest("[data-eod]")) { toggleEod(); return; }
-  const pl = t.closest("[data-plant]");
-  if (pl) { queueToggle(pl.dataset.plant); return; }
-  if (t.closest("[data-gain]")) { const f = NIGHT.forecast(); D.open(f.gainAsks[0]?.key, { only: f.gainAsks.map((n) => n.key) }); return; }
-  if (t.closest("[data-seal]")) { sealDay(); return; }
-  if (t.closest("[data-unseal]")) { unseal(); return; }
-  if (t.closest("[data-morning]")) { toMorning(); return; }
-  if (t.closest("[data-morning-done]")) { const box = $("#hm-moment"); morph($("#hm-body"), () => { S.morningOpen = false; NIGHT.phase = "day"; render(); }, { duration: 320 }); box && announce("Folded the morning recap."); return; }
-  if (t.closest("[data-rules]")) { S.rulesOpen = !S.rulesOpen; const sec = $("#rules"); sec.querySelector(".rl-h").setAttribute("aria-expanded", String(S.rulesOpen)); expand(sec, $("#rl-b"), S.rulesOpen); $("#ws-head")._h = null; return; }
   const bi = t.closest("[data-bring-in]");
   if (bi) { D.bringIn(bi.dataset.bringIn); return; }
-  const fd = t.closest("[data-find]");
-  if (fd) { commissionFind(fd.dataset.find); return; }
-  const fx = t.closest("[data-find-x]");
-  if (fx) { FV.dismiss(fx.dataset.findX); announce("Put aside. It won't come back today."); schedule(); return; }
   const ru = t.closest("[data-rec-undo]");
   if (ru) { undoRecord(ru.dataset.recUndo); return; }
-  if (t.closest("[data-herald-undo]")) { if (S.herald?.undo) undoRecord(S.herald.undo); return; }
+  if (t.closest("[data-herald-undo]")) { const u = S.herald?.undo; if (typeof u === "function") { S.herald.until = 0; u(); heraldNext(); } else if (u) undoRecord(u); return; }
+  // Chats: "send now" would stop background tasks; a failed prompt
+  const chc = t.closest("[data-chc]");
+  if (chc) { CH.resolveConfirm(S.view, chc.dataset.chc); return; }
+  const chr = t.closest("[data-chat-retry]");
+  if (chr) { CH.retry(chr.dataset.chatRetry); return; }
+  const che = t.closest("[data-chat-edit]");
+  if (che) { const text = CH.edit(che.dataset.chatEdit); if (text != null) { say.value = say.value.trim() ? `${text}\n\n${say.value}` : text; growSay(); saveDraft(); updateComposer(); say.focus(); } return; }
+  if (e.target.closest("[data-chat-stop]")) { stopRun(); return; }
+  // sub-agents: the strip under the checklist, the log, a sub-agent's row in a turn
+  const rc = t.closest("[data-run-call]");
+  if (rc) { const th = convThread(S.view); const r = [...(world.state.runs?.values() || [])].find((x) => x.spawn === rc.dataset.runCall); openRuns(th, r ? r.id : null); return; }
+  const ro = t.closest("#thead [data-run]");
+  if (ro) { openRuns(convThread(S.view), ro.dataset.run); return; }
+  if (t.closest("#thead [data-runs]")) { openRuns(convThread(S.view)); return; }
+  // storm blocks: open or fold a block or a row (thinking steps, an activity group, a command's output)
+  const tb = t.closest("[data-tb]");
+  if (tb) { const k = tb.dataset.tb; S.tbOpen[k] = !S.tbOpen[k]; schedule(); return; }
+  // a thread's own header: resolve or reopen (R1), rename, label
+  const rs = t.closest("[data-resolve]");
+  if (rs) { resolveThread(rs.dataset.resolve, rs.dataset.to === "resolve"); return; }
+  const tm = t.closest("[data-tmenu]");
+  if (tm) { S.tMenu = S.tMenu === tm.dataset.tmenu ? null : tm.dataset.tmenu; $("#top-who")._h = null; schedule(); if (S.tMenu) requestAnimationFrame(() => $(".tw-menu button")?.focus()); return; }
+  const tf = t.closest("[data-tfield]");
+  if (tf) { const tid = S.tMenu; S.tMenu = null; if (tf.dataset.tfield === "clear-label") saveThreadField(tid, "label", ""); else startThreadEdit(tid, tf.dataset.tfield); return; }
+  if (S.tMenu && !t.closest(".tw-menu")) { S.tMenu = null; $("#top-who")._h = null; schedule(); }
   if (t.closest("[data-ck]")) { const th = convThread(S.view); if (th) { S.ckOpen[th.id] = !S.ckOpen[th.id]; checklistRender(D.needItems()); } return; }
   const o = t.closest("[data-nx-opt]");
   if (o) { const n = homeParts().next; if (n) { o.classList.add("pressed"); nextDecide({ option: n.ask.options[+o.dataset.nxOpt] }); } return; }
@@ -1507,6 +1961,10 @@ document.addEventListener("click", (e) => {
   if (r) { retry(r.dataset.retry); return; }
   const ed = t.closest("[data-edit]");
   if (ed) { editFailed(ed.dataset.edit); return; }
+  const ab = t.closest("[data-att]");
+  if (ab) { openAttachment(ab); return; }
+  const fb = t.closest("[data-file]");
+  if (fb) { openSharedFile(fb); return; }
   const cp = t.closest("[data-copy]");
   if (cp) { navigator.clipboard?.writeText(cp.closest(".md-code")?.querySelector("code")?.textContent || "").catch(() => {}); cp.textContent = "Copied"; setTimeout(() => { cp.textContent = "Copy"; }, 1400); }
 });
@@ -1522,23 +1980,14 @@ $("#home").addEventListener("keydown", (e) => {
   const n = homeParts().next;
   if (!n || n.key !== card.dataset.key) return;
   if (/^[1-9]$/.test(e.key) && Array.isArray(n.ask.options) && !Kit.isBinary(n.ask) && n.effort === "glance") { const o = n.ask.options[+e.key - 1]; if (o != null) { e.preventDefault(); e.stopPropagation(); nextDecide({ option: o }); } }
-  else if (e.key === "a" && Kit.isBinary(n.ask) && n.effort === "glance") { e.preventDefault(); e.stopPropagation(); nextDecide("allow"); }
-  else if ((e.key === "d" || e.key === "D") && n.effort === "glance") { e.preventDefault(); e.stopPropagation(); card.querySelector("[data-nx-back]")?.click(); }
-  else if (e.key === "e" || e.key === "E" || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); decideKey(n.key); }
+  else if (K.is(e, "allow") && Kit.isBinary(n.ask) && n.effort === "glance") { e.preventDefault(); e.stopPropagation(); nextDecide("allow"); }
+  else if (K.is(e, "back") && n.effort === "glance") { e.preventDefault(); e.stopPropagation(); card.querySelector("[data-nx-back]")?.click(); }
+  else if (K.is(e, "details") || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); decideKey(n.key); }
 });
 function openNext() {
   const P0 = homeParts();
-  if (!P0.next || sealed()) { heraldShow({ kind: "calm", text: sealed() ? "Sealed until morning" : "Nothing needs you right now" }, 2400); return; }
+  if (!P0.next) { heraldShow({ kind: "calm", text: "Nothing needs you right now" }, 2400); return; }
   decideKey(P0.next.key);
-}
-
-async function commissionFind(id) {
-  const p = FV.commission(id);
-  schedule();
-  const t = await p;
-  const f = FV.S.list.find((x) => x.id === id);
-  if (t) { announce(`Thread started in ${PROJ(t.project)}: ${f.title}`); heraldShow({ kind: "started", text: `Thread started: ${f.title}`, sub: PROJ(t.project), open: "t:" + t.id }, 6000); }
-  schedule();
 }
 
 // ── All threads: searchable, filtered; finished ones fold into one line ────
@@ -1548,8 +1997,8 @@ function allRender() {
   const pid = convProject(S.view);
   const q = $("#all-q").value.trim().toLowerCase();
   const needs = D.needItems();
-  const ts = threadsOf(pid);
-  const cat = (t) => (needs.some((n) => n.t.id === t.id && n.admitted && n.group !== "stopped") ? "needs" : t.state === "failed" ? "stopped" : t.state === "working" || WAITING(t.state) ? "working" : t.state === "done" ? "done" : "other");
+  const ts = world.state.threads.filter((t) => t.project === pid);
+  const cat = (t) => (needs.some((n) => n.t.id === t.id && n.admitted && n.group !== "stopped") ? "needs" : t.state === "failed" ? "stopped" : t.state === "working" || WAITING(t.state) ? "working" : t.state === "done" || t.state === "resolved" ? "done" : "other");
   const counts = { all: ts.length, needs: 0, working: 0, done: 0, stopped: 0 };
   for (const t of ts) { const c = cat(t); if (counts[c] != null) counts[c]++; }
   const F = [["all", "All"], ["needs", "Needs you"], ["working", "Working"], ["done", "Done"], ["stopped", "Stopped"]];
@@ -1562,13 +2011,13 @@ function allRender() {
   const row = (t) => {
     const c = t.checklist;
     const k = cat(t);
-    return `<li><button type="button" class="ar st-${k}" data-go="t:${esc(t.id)}"><i class="g g-${k === "needs" ? "needs_reply" : t.state}" aria-hidden="true"></i><span class="ar-t">${esc(t.title)}</span><span class="ar-s">${k === "needs" ? "Needs you" : wordOf(t)}</span><span class="mini" aria-label="${c.done} of ${c.total}"><i style="--p:${c.total ? c.done / c.total : 0}"></i></span><span class="ar-a">${esc(short(t.lastAt))}</span></button></li>`;
+    return `<li><button type="button" class="ar st-${k}" data-go="t:${esc(t.id)}"><i class="g g-${k === "needs" ? "needs_reply" : glyphOf(t)}" aria-hidden="true"></i><span class="ar-t">${esc(t.title)}</span>${t.label ? `<span class="ar-l">${esc(t.label)}</span>` : ""}<span class="ar-s">${k === "needs" ? "Needs you" : wordOf(t)}</span><span class="mini" aria-label="${c.done} of ${c.total}"><i style="--p:${c.total ? c.done / c.total : 0}"></i></span><span class="ar-a">${esc(short(t.lastAt))}</span></button></li>`;
   };
   const fold = S.allFilter === "all" && !q;
   const liveL = fold ? list.filter((t) => cat(t) !== "done") : list;
   const done = fold ? list.filter((t) => cat(t) === "done") : [];
   let html = liveL.length ? `<ul class="ar-list">${liveL.map(row).join("")}</ul>` : "";
-  if (done.length) html += `<div class="ar-done${S.allDone ? " is-open" : ""}"><button type="button" class="ar-fold" data-all-done aria-expanded="${S.allDone}">${ICON.check}<span><b>${done.length} done</b> this week</span>${ICON.chevron}</button><div class="ar-db"${S.allDone ? "" : " hidden"}><div class="ar-di"><ul class="ar-list">${done.map(row).join("")}</ul></div></div></div>`;
+  if (done.length) html += `<div class="ar-done${S.allDone ? " is-open" : ""}"><button type="button" class="ar-fold" data-all-done aria-expanded="${S.allDone}">${ICON.check}<span><b>${done.length} done</b>${done.some((t) => t.state === "resolved") ? " or resolved" : ""}</span>${ICON.chevron}</button><div class="ar-db"${S.allDone ? "" : " hidden"}><div class="ar-di"><ul class="ar-list">${done.map(row).join("")}</ul></div></div></div>`;
   if (!html) html = `<p class="ar-none">Nothing matches “${esc(q)}”.</p>`;
   $("#all-list").innerHTML = html;
 }
@@ -1600,7 +2049,7 @@ allEl.addEventListener("click", (e) => {
 
 // ── Create XO Project ───────────────────────────────────────────────────────
 const dlg = $("#create-dlg");
-let projectsRoot = world.mode === "live" ? null : "~/xo-projects";
+let projectsRoot = null;
 const slugify = (name) => String(name || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
 function renderWhere() {
   const id = slugify($("#cp-name").value);
@@ -1619,7 +2068,7 @@ async function openCreate() {
   renderWhere();
   dlg.showModal();
   $("#cp-name").focus();
-  if (world.mode === "live" && !projectsRoot) {
+  if (!projectsRoot) {
     try {
       const { api } = await import("./api.js");
       const cfg = await api.workspaceConfig();
@@ -1630,6 +2079,8 @@ async function openCreate() {
 }
 function closeCreate() {
   if (!dlg.open) return;
+  // On a phone the sidebar button that opened it is inside the closed drawer: return to the menu.
+  if (PHONE.matches) setTimeout(() => $("#pb-menu").focus({ preventScroll: true }), RM.matches ? 0 : 170);
   if (RM.matches) { dlg.close(); return; }
   dlg.classList.add("is-closing");
   setTimeout(() => { dlg.classList.remove("is-closing"); dlg.close(); }, 160);
@@ -1647,19 +2098,11 @@ async function submitCreate() {
   btn.disabled = true;
   btn.innerHTML = `<i class="spin" aria-hidden="true"></i>Creating…`;
   try {
-    if (world.mode === "live") {
-      const { api } = await import("./api.js");
-      await api.createProject({ path: `${projectsRoot}/${id}`, displayName: name, description });
-      await world.act.refresh();
-    } else {
-      // Demo: simulated locally. Live calls GET /api/config/workspace, then POST /api/files/mkdir {path, scaffold:true, display_name, description}.
-      await wait(650);
-      world.state.projects.push({ id, name, kind: "project" });
-      await world.act.refresh();
-    }
+    const { api } = await import("./api.js");
+    await api.createProject({ path: `${projectsRoot}/${id}`, displayName: name, description });
+    await world.act.refresh();
     if (description) S.desc[id] = description;
-    if (!DEMO) S.local["p:" + id] = [{ id: `l${++S.n}_hello`, conv: "p:" + id, at: Date.now(), who: "event", tone: "ok", text: `${name} created · folder, plan and memory scaffolded${description ? ` · ${description.replace(/[.\s]+$/, "")}` : ""}` }];
-    else S.local["p:" + id] = [{ id: `l${++S.n}_hello`, conv: "p:" + id, at: Date.now(), who: "coord", text: `**${name}** is ready: its folder, plan and memory are scaffolded${description ? `, and I've noted what it's for: _${description.replace(/[.\s]+$/, "")}_` : ""}.\n\nTell me the first thing you'd like done.` }];
+    S.local["p:" + id] = [{ id: `l${++S.n}_hello`, conv: "p:" + id, at: Date.now(), who: "event", tone: "ok", text: `${name} created · folder, plan and memory scaffolded${description ? ` · ${description.replace(/[.\s]+$/, "")}` : ""}` }];
     closeCreate();
     go("p:" + id, { focus: true });
     heraldShow({ kind: "ready", text: `${name} is ready`, sub: `${projectsRoot}/${id}` }, 5200);
@@ -1693,7 +2136,7 @@ const jump = $("#jump"), jq = $("#jump-q"), jl = $("#jump-list");
 let jsel = 0, jitems = [];
 function jumpRender() {
   const q = jq.value.trim().toLowerCase();
-  const all = [{ v: "home", name: "Home", sub: "Your next move", icon: ICON.home }, { v: "ws", name: "Workspace", sub: "The coordinator", icon: XO }];
+  const all = [{ v: "home", name: "Home", sub: "Your next move", icon: ICON.home }, { v: "ws", name: "Workspace", sub: "The coordinator", icon: XO }, { v: "chats", name: "Chats", sub: "One agent, one folder", icon: ICON.thread }];
   for (const p of projects()) {
     all.push({ v: "p:" + p.id, name: p.name, sub: "Project", icon: ICON.project });
     for (const t of threadsOf(p.id)) all.push({ v: "t:" + t.id, name: t.title, sub: `${p.name} · ${wordOf(t).toLowerCase()}`, icon: `<i class="g g-${glyphOf(t)}"></i>`, t: true });
@@ -1717,14 +2160,116 @@ jump.addEventListener("mousedown", (e) => { if (e.target === jump) closeJump(); 
 
 // ── keys sheet ──────────────────────────────────────────────────────────────
 const keys = $("#keys");
-function soundRender() { const b = $("#sound-tog"); b.setAttribute("aria-pressed", String(sound.on)); b.innerHTML = `${ICON.sound}Sounds ${sound.on ? "on" : "off"}`; }
+function soundRender() { $("#sound-tog").setAttribute("aria-checked", String(sound.on)); }
 $("#sound-tog").addEventListener("click", () => { sound.on = !sound.on; soundRender(); sound.play("allow"); });
+function hopsRender() { const b = $("#hops-tog"); b.setAttribute("aria-checked", String(!!S.showHops)); if (!b.querySelector(".th-knob svg")) b.querySelector(".th-knob").innerHTML = ICON.router; }
+$("#hops-tog").addEventListener("click", () => {
+  S.showHops = !S.showHops;
+  try { localStorage.setItem("cv-hops", S.showHops ? "1" : "0"); } catch { /* private */ }
+  hopsRender();
+  const t = convThread(S.view);
+  if (S.showHops && t && world.act.loadHops) world.act.loadHops(t.id);
+  if (S.showHops && !t) loadChatHops(S.view);
+  announce(S.showHops ? "Showing how messages travel." : "Hiding how messages travel.");
+  schedule();
+});
+hopsRender();
 keys.addEventListener("click", (e) => { if (e.target === keys || e.target.closest("[data-close]")) closeKeys(); });
 let keysReturn = null;
-function openKeys() { keysReturn = document.activeElement; keys.hidden = false; keys.querySelector("[data-close]").focus(); }
+function openKeys() { keysSheetRender(); keysReturn = document.activeElement; keys.hidden = false; keys.querySelector("[data-close]").focus(); }
 function closeKeys() { keys.hidden = true; keysReturn?.focus?.({ preventScroll: true }); }
-$("#help-side").addEventListener("click", openKeys);
-$("#help-phone").addEventListener("click", openKeys);
+
+// ── settings: a page over the main area; closing it returns exactly where you were ──
+const setEl = $("#settings");
+let setReturn = null;
+const SETS = createSettings({ world, announce, PROJ, onChange: () => schedule() });
+function setPage(id) {
+  for (const b of $$("[data-set]")) b.setAttribute("aria-selected", String(b.dataset.set === id));
+  for (const p of $$("[data-page]")) p.hidden = p.dataset.page !== id;
+  SETS.open(id);
+}
+function openSettings() {
+  if (!setEl.hidden) return;
+  setReturn = document.activeElement;
+  setDrawer(false);
+  if (D.isOpen()) D.close();
+  IQ.close({ restore: false });
+  setEl.hidden = false;
+  $("#set-side").classList.add("is-on");
+  $("#set-side").setAttribute("aria-expanded", "true");
+  setEl.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+}
+function closeSettings({ restore = true } = {}) {
+  if (setEl.hidden) return;
+  if (S.recording) { S.recording = null; keysPageRender(); }
+  setEl.hidden = true;
+  $("#set-side").classList.remove("is-on");
+  $("#set-side").setAttribute("aria-expanded", "false");
+  // back where you were; an opener that's gone or hidden (Jump's box) gives way to the composer
+  if (restore) (setReturn && setReturn.isConnected && setReturn.offsetParent ? setReturn : say)?.focus?.({ preventScroll: true });
+}
+$("#set-side").addEventListener("click", () => (setEl.hidden ? openSettings() : closeSettings()));
+$("#set-phone").addEventListener("click", openSettings);
+$("#set-x").addEventListener("click", () => closeSettings());
+for (const b of $$("[data-set]")) b.addEventListener("click", () => setPage(b.dataset.set));
+
+// ── shortcuts: one list (keys.js) drives the handlers, the tooltips, the sheet and this page ──
+function keysSheetRender() {
+  const col = (ids) => `<dl class="keys">${ids.map((g) => `<dt class="kh">${esc(K.GROUPS.find((x) => x.id === g).name)}</dt><dd></dd>` +
+    K.ACTIONS.filter((a) => a.scope === g).map((a) => `<dt><kbd>${esc(K.label(a.id))}</kbd></dt><dd>${esc(a.label)}</dd>`).join("")).join("")}</dl>`;
+  $("#keys-cols").innerHTML = col(["global"]) + col(["decision", "intel"]);
+}
+function keysPageRender() {
+  const box = $("#set-keys-list");
+  const rec = S.recording, err = S.keyErr;
+  box.innerHTML = `<p class="kp-t">Click a key to change it. Keys that work anywhere need ⌘ or Ctrl, or a symbol like / or ?, so typing never sets them off. Your keys are kept in this browser.</p>` +
+    K.GROUPS.map((g) => `<section class="kg" aria-labelledby="kg-${g.id}"><h3 id="kg-${g.id}">${esc(g.name)}</h3><div class="kl">` +
+      K.ACTIONS.filter((a) => a.scope === g.id).map((a) => {
+        const key = a.fixed
+          ? `<span class="kr-k is-fixed" title="This one is fixed"><kbd>${esc(a.fixed)}</kbd></span>`
+          : `<button type="button" class="kr-k${rec === a.id ? " is-rec" : ""}" data-rebind="${a.id}" aria-label="${esc(a.label)}: ${esc(K.label(a.id))}. ${rec === a.id ? "Press the new key, or Esc to cancel" : "Change it"}">${rec === a.id ? `<span class="kr-rec">Press a key…</span>` : `<kbd>${esc(K.label(a.id))}</kbd>`}</button>`;
+        const reset = !a.fixed && K.changed(a.id) ? `<button type="button" class="kr-r" data-kreset="${a.id}" title="Back to ${esc(K.show(a.def))}" aria-label="Reset ${esc(a.label)} to ${esc(K.show(a.def))}">${ICON.retry}</button>` : `<span class="kr-r" aria-hidden="true"></span>`;
+        return `<div class="kr${K.changed(a.id) ? " is-changed" : ""}${a.fixed ? " is-fixed" : ""}"><span class="kr-l">${esc(a.label)}</span>${key}${reset}</div>` +
+          (err && err.id === a.id ? `<p class="kr-err" role="alert">${esc(err.msg)}</p>` : "");
+      }).join("") + `</div></section>`).join("") +
+    `<div class="kp-f"><button type="button" class="btn" id="keys-reset-all"${K.anyChanged() ? "" : " disabled"}>${ICON.retry}Reset all to defaults</button></div>`;
+  if (rec) box.querySelector(`[data-rebind="${rec}"]`)?.focus({ preventScroll: true });
+}
+$("#set-keys-list").addEventListener("click", (e) => {
+  const rb = e.target.closest("[data-rebind]");
+  if (rb) { S.keyErr = null; S.recording = S.recording === rb.dataset.rebind ? null : rb.dataset.rebind; keysPageRender(); return; }
+  const rs = e.target.closest("[data-kreset]");
+  if (rs) { S.keyErr = null; K.reset(rs.dataset.kreset); return; }
+  if (e.target.closest("#keys-reset-all")) { S.keyErr = null; S.recording = null; K.resetAll(); }
+});
+document.addEventListener("pointerdown", (e) => {
+  // a click anywhere but a key chip cancels a recording
+  if (S.recording && !e.target.closest?.("[data-rebind]")) { S.recording = null; S.keyErr = null; keysPageRender(); }
+}, true);
+addEventListener("keydown", (e) => {
+  if (!S.recording) return;
+  e.preventDefault(); e.stopPropagation();
+  if (e.key === "Escape" && !e.metaKey && !e.ctrlKey) { S.recording = null; S.keyErr = null; keysPageRender(); return; }
+  const combo = K.fromEvent(e);
+  if (!combo) return; // a modifier on its own: keep listening
+  const id = S.recording;
+  const r = K.set(id, combo);
+  S.recording = null;
+  S.keyErr = r.error ? { id, msg: r.error } : null;
+  keysPageRender();
+  $(`[data-rebind="${id}"]`)?.focus({ preventScroll: true });
+  if (r.ok) announce(`${K.ACTIONS.find((a) => a.id === id).label}: ${K.label(id)}`);
+}, true);
+K.onChange(() => { keysPageRender(); if (!keys.hidden) keysSheetRender(); schedule(); });
+keysPageRender();
+setEl.querySelector(".set-nav").addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  e.preventDefault();
+  const tabs = $$("[data-set]");
+  const i = tabs.indexOf(document.activeElement);
+  const nx = tabs[(i + (e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+  nx.focus(); setPage(nx.dataset.set);
+});
 
 // ── theme toggle ────────────────────────────────────────────────────────────
 $("#theme").addEventListener("click", () => {
@@ -1735,50 +2280,69 @@ $("#theme").addEventListener("click", () => {
 });
 
 // ── global keys ─────────────────────────────────────────────────────────────
+const GLOBAL = {
+  jump: () => (jump.hidden ? openJump() : closeJump()),
+  intel: () => (IQ.isOpen ? IQ.close() : IQ.open(sessionOf(S.view), $("#iq"))),
+  write: () => say.focus(),
+  keys: () => openKeys(),
+};
 addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); jump.hidden ? openJump() : closeJump(); return; }
-  if ((e.metaKey || e.ctrlKey) && e.key === ".") { e.preventDefault(); IQ.isOpen ? IQ.close() : IQ.open(sessionOf(S.view), $("#iq")); return; }
+  if (S.recording) return; // Settings › Keyboard is listening for a new key
+  // ⌘/Ctrl keys work everywhere, even while typing
+  for (const id of ["jump", "intel"]) if (K.hasMod(id) && K.is(e, id)) { e.preventDefault(); GLOBAL[id](); return; }
   if (!jump.hidden || dlg.open || IQ.isOpen) return;
   if (e.key === "Escape") {
+    if (RS.open) { runsEscape(); return; }
+    if (VW.isOpen) { VW.close(); return; }
     if (!keys.hidden) { closeKeys(); return; }
+    if (!setEl.hidden) { closeSettings(); return; }
     if (!allEl.hidden) { closeAll(); return; }
     if ($("#app").classList.contains("drawer")) { setDrawer(false); return; }
     if (D.isOpen()) { D.close(); return; }
+    if (CH.setupOpen) { CH.closeSetup(); return; }
     if (S.view.startsWith("t:")) back();
+    else if (S.view.startsWith("c:")) go("chats");
     return;
   }
   if (e.target.matches?.("input, textarea, [contenteditable]") || e.metaKey || e.ctrlKey || e.altKey) return;
   if (!keys.hidden || !allEl.hidden) return;
-  const k = e.key;
-  if (k === "?") { e.preventDefault(); openKeys(); }
-  else if (k === "/") { e.preventDefault(); say.focus(); }
-  else if (k === "n" || k === "N") { e.preventDefault(); openNext(); }
-  else if (k === "h" || k === "H") { e.preventDefault(); go("home"); }
-  else if (k === "w" || k === "W") { e.preventDefault(); go("ws"); }
-  else if (k === "t" || k === "T") { if (S.view.startsWith("p:") || convThread(S.view)) { e.preventDefault(); openAll(); } }
-  else if (k === "u" || k === "U") { if (D.undo()) e.preventDefault(); }
-  else if (k === "c" || k === "C") { const th = convThread(S.view); if (th) { e.preventDefault(); S.ckOpen[th.id] = !S.ckOpen[th.id]; checklistRender(D.needItems()); } }
-  else if (k === "[" || k === "]") {
-    const pid = convProject(S.view);
-    if (!pid || pid === "workspace") return;
-    const ts = threadsOf(pid).sort((a, b) => SORT_STATE[a.state] - SORT_STATE[b.state] || b.lastAt - a.lastAt);
-    if (!ts.length) return;
-    e.preventDefault();
-    const i = ts.findIndex((t) => "t:" + t.id === S.view);
-    const nx = ts[(i + (k === "]" ? 1 : ts.length - 1) + (i < 0 && k === "[" ? 1 : 0)) % ts.length];
-    go("t:" + nx.id, { from: S.view.startsWith("t:") ? S.parent[S.view] : S.view });
-  }
+  // Only keys that can't be hit by accident: no single letters (a stray keystroke must never
+  // navigate or open something). Decision keys live on a focused decision card only.
+  for (const id of Object.keys(GLOBAL)) if (K.is(e, id)) { e.preventDefault(); GLOBAL[id](); return; }
 });
 
 // ── boot ────────────────────────────────────────────────────────────────────
 $("#brand-mark").innerHTML = XO;
-$("#side-add").innerHTML = ICON.plus;
+$("#sc-ic").innerHTML = ICON.plus;
 $("#dlg-ic").innerHTML = ICON.project;
 $("#ic-home").innerHTML = ICON.home;
 $("#ic-ws").innerHTML = XO;
+$("#ic-chats").innerHTML = ICON.thread;
+// a new chat's setup: folder, agent, model, effort, what it may do (all from the runtime's feature list)
+{
+  const cs = $("#cs-pop");
+  cs.addEventListener("change", (e) => { const f = e.target.closest("[data-cs]"); if (f) { CH.setPref(f.dataset.cs, f.value); CH.renderSetup(); updateComposer(); } });
+  cs.addEventListener("click", (e) => {
+    const m = e.target.closest("[data-csmode]");
+    if (m) { CH.setPref("mode", m.dataset.csmode); CH.renderSetup(); updateComposer(); return; }
+    if (e.target.closest("[data-cs-done]")) { CH.closeSetup(); updateComposer(); }
+  });
+  cs.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); CH.closeSetup(); } });
+  document.addEventListener("pointerdown", (e) => { if (CH.setupOpen && !cs.contains(e.target) && !e.target.closest("#target")) CH.closeSetup(); });
+}
 $("#pb-menu").innerHTML = ICON.menu;
 $("#side-x").innerHTML = ICON.close;
 $("#pn-x").innerHTML = ICON.close;
+$("#set-x").innerHTML = ICON.close;
+$("#set-side-ic").innerHTML = ICON.gear;
+// Settings' rail: each section with its icon (hub #18/#19)
+{
+  const IC = { general: ICON.sliders, appearance: ICON.sun, routing: ICON.router, rules: ICON.rule, worktrees: ICON.branch, night: ICON.moon, sounds: ICON.sound, keys: ICON.key };
+  for (const b of $$("[data-set]")) b.innerHTML = `<span class="sn-ic" aria-hidden="true">${IC[b.dataset.set] || ""}</span><span class="sn-t">${esc(b.textContent)}</span>`;
+}
+$("#sf-ic").innerHTML = ICON.search;
+$("#set-phone").innerHTML = ICON.gear;
+$("#sound-tog .th-knob").innerHTML = ICON.sound;
 for (const x of $$(".sheet [data-close]")) x.innerHTML = ICON.close;
 $("#jump-ic").innerHTML = ICON.search;
 $("#all-ic").innerHTML = ICON.search;
@@ -1789,23 +2353,7 @@ applyTheme(THEME.get());
 soundRender();
 PHONE.addEventListener("change", () => { setDrawer(false); render(); });
 
-(async () => {
-  // Place the demo at a moment of the day: day, evening, night, the morning, or back after days away.
-  S.booting = true;
-  try {
-  const phase = DEMO ? NIGHT.boot() : "day";
-  if (phase === "night") { await NIGHT.endDay(); P.sealed = true; }
-  else if (phase === "morning") {
-    await NIGHT.endDay();
-    NIGHT.runNight(NIGHT.away || 1);
-    S.morningOpen = true;
-    if (NIGHT.away) { const adm = D.needItems().filter((n) => n.admitted && !n.bypass); P.park(adm.slice(3).map((n) => n.key)); }
-  }
-  } finally { S.booting = false; }
-  world.subscribe(() => schedule());
-  follow();
-  loadDraft();
-  render();
-  absorbSweep();
-  if (world.mode === "demo") window.__cv = { world, S, P, D, R, FV, NIGHT, IQ, go, render, heraldShow, waitSince, sealDay, toMorning };
-})();
+world.subscribe(() => schedule());
+follow();
+loadDraft();
+render();
