@@ -1191,14 +1191,21 @@ const canAttach = (v) => v !== "chats" && !CH.isChats(v);
 /** The chat id a file added here uploads to: the Workspace, the project, or the thread's project. */
 const attachChat = (v) => { const p = chatOf(v); return p && world.act.chatId ? world.act.chatId(p) : null; };
 const filesHere = () => (canAttach(S.view) ? tray.status(S.view) : { count: 0, busy: false, failed: false });
+// An image chip shows the picture itself, from the bytes the browser already holds: no request.
+const thumbs = new WeakMap(); // blob → object URL, freed when the chip leaves the composer
+const thumbOf = (c) => { let u = thumbs.get(c.blob); if (!u) { u = URL.createObjectURL(c.blob); thumbs.set(c.blob, u); } return u; };
+const dropThumb = (c) => { const u = c && thumbs.get(c.blob); if (u) { URL.revokeObjectURL(u); thumbs.delete(c.blob); } };
 function chipHtml(c) {
   const img = c.type ? kindOf(c.type) === "image" : /^image\//.test(c.blob?.type || "");
+  const thumb = img && c.blob && c.state !== "failed";
+  // once uploaded it opens in the viewer, like a sent message's file
+  const ic = thumb ? `<img src="${esc(thumbOf(c))}" alt="" decoding="async">` : img ? ICON.image : ICON.doc;
   const state = c.state === "failed" ? `<span class="att-err">${esc(uploadErrorText(c.err))}</span>`
     : c.state === "uploading" ? `<span class="att-pct">Uploading</span>` : "";
   const sub = [c.paste ? esc(c.name) : esc(fmtSize(c.bytes ?? c.size)), state].filter(Boolean).join(" · ");
   const btn = (a, label, icon, extra = "") => `<button type="button" class="att-b" data-a="${a}" aria-label="${esc(label)}" title="${esc(label)}"${extra}>${icon}</button>`;
   return `<li class="att st-${c.state}${c.paste ? " is-paste" : ""}" data-lid="${esc(c.lid)}"${c.err ? ` title="${esc(c.err.message || "")}"` : ""}>` +
-    `<span class="att-ic">${img ? ICON.image : ICON.doc}</span>` +
+    (thumb && c.id ? `<button type="button" class="att-ic is-img" data-a="view" aria-label="Preview ${esc(c.name)}" title="Preview">${ic}</button>` : `<span class="att-ic${thumb ? " is-img" : ""}">${ic}</span>`) +
     `<span class="att-t"><span class="att-n">${esc(c.paste ? pasteLabel(c.paste) : c.name)}</span><span class="att-m">${sub}</span></span>` +
     (c.paste ? btn("view", "Preview the pasted text", ICON.eye) + `<button type="button" class="att-tx" data-a="inline" title="Put it back in the message as text">As text</button>` : "") +
     (c.state === "failed" && !FINAL.has(c.err?.code) ? btn("retry", `Retry ${c.name}`, ICON.retry) : "") +
@@ -1257,12 +1264,12 @@ trayEl.addEventListener("click", (e) => {
   if (b.dataset.a === "x") {
     // just drop its id: the server sweeps a file no message names
     const next = li.nextElementSibling?.querySelector("[data-a=x]") || li.previousElementSibling?.querySelector("[data-a=x]");
-    tray.remove(S.view, lid);
+    dropThumb(tray.remove(S.view, lid));
     announce(`${c.paste ? "The pasted text" : c.name} removed.`);
     trayRender();
     (next && next.isConnected ? next : say).focus({ preventScroll: true });
   } else if (b.dataset.a === "retry") tray.retry(S.view, lid);
-  else if (b.dataset.a === "view") VW.open({ name: c.name, bytes: c.size, local: c.paste }, b);
+  else if (b.dataset.a === "view") VW.open(c.paste != null ? { name: c.name, bytes: c.size, local: c.paste } : { name: c.name, type: c.type, bytes: c.bytes ?? c.size, att: { chat: c.chat, id: c.id } }, b);
   else if (b.dataset.a === "inline") { tray.remove(S.view, lid); insertText(c.paste); announce("The pasted text is back in the message."); }
 });
 say.addEventListener("paste", (e) => {
@@ -1541,7 +1548,7 @@ function sendLive(raw) {
   const from = say.getBoundingClientRect();
   // client_id: a retry of this exact message is the same request, so the server stores it once (UI-reference §0.7)
   const m = { id: `l${++S.n}_${Date.now().toString(36)}`, conv, at: Date.now(), who: "you", text, status: "sending", target: thread ? null : chat, cid: `ui_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}` };
-  if (files.count) m.files = tray.take(S.view);
+  if (files.count) { m.files = tray.take(S.view); m.files.forEach(dropThumb); }
   (S.local[conv] = S.local[conv] || []).push(m);
   say.value = ""; saveDraft(); updateComposer();
   const btn = $("#send"); btn.classList.remove("fired"); void btn.offsetWidth; btn.classList.add("fired");
