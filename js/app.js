@@ -1290,7 +1290,14 @@ function heraldNext() {
   let next = null;
   if (iu >= 0) next = HQ.splice(iu, 1)[0];
   else if (HQ.length) { next = HQ[HQ.length - 1]; HQ.length = 0; }
-  if (next) heraldPut(next.h, next.ms); else schedule();
+  if (!next) { schedule(); return; }
+  let { h, ms } = next;
+  // a line whose Undo has a deadline (h.undoUntil) comes back only for what is left of it, or without its Undo
+  if (h.undo && h.undoUntil) {
+    const left = h.undoUntil - Date.now();
+    if (left < 600) { h = { ...h, undo: null, undoUntil: 0 }; ms = Math.min(ms, 2400); } else ms = Math.min(ms, left);
+  }
+  heraldPut(h, ms);
 }
 function heraldRender(needs) {
   const box = $("#herald");
@@ -1301,7 +1308,7 @@ function heraldRender(needs) {
     const inner = `${ic}<span class="hr-t">${esc(h.text)}</span>${h.sub ? `<span class="hr-s">${esc(h.sub)}</span>` : ""}${h.open ? `<span class="hr-go">Open ${ICON.arrow}</span>` : h.decide ? `<span class="hr-go">Look ${ICON.arrow}</span>` : ""}`;
     html = h.open ? `<button type="button" class="hr hr-ev k-${h.kind}" data-go="${esc(h.open)}" data-hn="${h.n}">${inner}</button>`
       : h.decide ? `<button type="button" class="hr hr-ev k-${h.kind}" data-decide="${esc(h.decide)}" data-hn="${h.n}">${inner}</button>`
-      : h.undo ? `<div class="hr hr-ev k-${h.kind}" data-hn="${h.n}">${inner}<button type="button" class="hr-undo" data-herald-undo>${esc(h.undoLabel || "Undo")}</button></div>`
+      : h.undo ? `<div class="hr hr-ev has-undo k-${h.kind}" data-hn="${h.n}">${inner}<button type="button" class="hr-undo" data-herald-undo>${esc(h.undoLabel || "Undo")}</button></div>`
       : `<div class="hr hr-ev k-${h.kind}" data-hn="${h.n}">${inner}</div>`;
   } else if (!DEMO && connLine(world.state)) {
     // live: an honest, persistent line when XO can't be reached, can't run, or waits on a limit (P0-8)
@@ -1327,7 +1334,7 @@ function recordLine(session, rec) {
   const m = { id: `rec${++S.n}`, who: "rec", at: Date.now(), text: rec.text, refused: !!rec.refused, undo: rec.undo || null, until: Date.now() + 3000 };
   (S.local[conv] = S.local[conv] || []).push(m);
   if (rec.undo) setTimeout(schedule, 3050);
-  if (S.view === "home" || (S.view !== conv)) heraldShow({ kind: "rec", text: rec.text, undo: rec.undo ? m.id : null }, rec.undo ? 3200 : 4200);
+  if (S.view === "home" || (S.view !== conv)) heraldShow({ kind: "rec", text: rec.text, undo: rec.undo ? m.id : null, undoUntil: rec.undo ? m.until : 0 }, rec.undo ? 3200 : 4200);
   announce(rec.text);
   schedule();
 }
@@ -1338,7 +1345,7 @@ function undoRecord(id) {
       m.undo(); m.undo = null;
       m.text = `${m.text} · undone`;
       announce("Undone.");
-      if (S.herald && S.herald.undo === id) S.herald.until = 0;
+      if (S.herald && S.herald.undo === id) { S.herald.until = 0; heraldNext(); }
       schedule();
       return;
     }
@@ -1413,7 +1420,8 @@ function sendRender() {
 function chatTargetRender() {
   sendNowRender();
   if (!CH.isChats(S.view)) return false;
-  const html = liveBlock() ? `<span class="tg-warn">${ICON.pause}</span><span>Sending is paused · ${esc(liveBlock())}</span>` : CH.targetHtml(S.view);
+  // an ended chat says so in its own words; "paused" would promise it comes back
+  const html = CH.blocked(S.view) ? CH.targetHtml(S.view) : liveBlock() ? `<span class="tg-warn">${ICON.pause}</span><span>Sending is paused · ${esc(liveBlock())}</span>` : CH.targetHtml(S.view);
   if ($("#target")._h !== html) { $("#target").innerHTML = html; $("#target")._h = html; }
   return true;
 }
@@ -1556,7 +1564,8 @@ function stopLive(run) {
       heraldShow({ kind: "halt", text: r && r.stopped === false ? "It had already finished" : "Stopped", sub: r && r.stopped === false ? what : `${what} · what it did is kept` }, 4200);
       announce(r && r.stopped === false ? "It had already finished." : `Stopped ${what}. What it did is kept.`);
     } catch (err) {
-      heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: err.message, undo: () => stopRun(), undoLabel: "Retry" }, 7000);
+      // Retry stops the same session, wherever you are when you press it
+      heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: `${what} · ${err.message}`, undo: () => stopLive(run), undoLabel: "Retry" }, 7000);
     } finally {
       if (S.stops.get(token.session) === token) S.stops.delete(token.session);
       schedule();

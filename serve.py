@@ -10,8 +10,15 @@ responses are relayed chunk by chunk with no buffering.
 
 Why a proxy: the backend refuses browser writes whose Origin it does not
 recognise. This server is the browser's origin, so it applies its own
-same-origin check to writes and then forwards them WITHOUT the browser's
+same-origin check and then forwards WITHOUT the browser's
 Origin/Referer/Sec-Fetch-* headers (as a server-side proxy would).
+
+What it refuses, whatever the page asks:
+- any request, read or write, from a page it didn't serve (several backend
+  GETs write or call out);
+- the routes this UI never uses that expose secret values, raw files or
+  file writes anywhere under $HOME (NEVER_FORWARD), in every spelling;
+- a request path with "#" or "." / ".." segments, raw or encoded.
 
 Standard library only.
 """
@@ -62,7 +69,7 @@ DROP_RESPONSE = {
 }
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # Backend routes this UI never uses and that expose too much: raw secret values or bulk secret writes, and
-# raw reads of any file under $HOME. They are never forwarded, whatever the page asks (the hub reuses this
+# raw reads or writes of any file under $HOME. They are never forwarded, whatever the page asks (the hub reuses this
 # handler, so the same holds there).
 NEVER_FORWARD = [
     ("GET", re.compile(r"^/api/secrets/env$")),
@@ -72,6 +79,9 @@ NEVER_FORWARD = [
     ("POST", re.compile(r"^/api/files/content$")),
     ("POST", re.compile(r"^/api/files/content-binary$")),
     ("POST", re.compile(r"^/api/files/list-directory$")),
+    # writes anywhere under $HOME; this UI creates folders only with /api/files/mkdir
+    ("POST", re.compile(r"^/api/files/save$")),
+    ("POST", re.compile(r"^/api/files/upload$")),
     # An agent profile's secrets file, unmasked (Hermes), and its whole-file replace: every method.
     ("*", re.compile(r"^/api/agents/[^/]+/[^/]+/secrets$")),
 ]
@@ -83,6 +93,13 @@ def never_forward(method: str, path: str) -> bool:
     p = unquote(unquote(re.split(r"[?#]", path, maxsplit=1)[0]))
     p = re.sub(r"/+", "/", p).rstrip("/") or "/"
     return any(m in (method, "*") and rx.match(p) for m, rx in NEVER_FORWARD)
+
+
+def odd_path(path: str) -> bool:
+    """True for a path no page of this UI sends: a "#", raw or encoded, or a "." or ".." segment, raw or
+    encoded. The backend doesn't resolve them today; refusing them keeps the checked path the routed one."""
+    p = unquote(unquote(path.split("?", 1)[0]))
+    return "#" in path or "#" in p or any(seg in (".", "..") for seg in p.split("/"))
 
 
 MAX_BODY = 1 << 20  # 1 MiB is plenty for a chat message
@@ -159,10 +176,10 @@ class Handler(SimpleHTTPRequestHandler):
     # ── proxy ────────────────────────────────────────────────────────────────
     def _proxy(self):
         method = self.command
-        # Browsers never send a fragment. The backend drops one before routing, so a "#" here could only
-        # be an attempt to make the path checked below differ from the path the backend routes.
-        if "#" in self.path:
-            return self._json_error(400, "bad_target", "A request path can't contain \"#\".")
+        # Browsers never send a fragment or dot segments. The backend drops a fragment before routing, so
+        # these could only be an attempt to make the path checked below differ from the path it routes.
+        if odd_path(self.path):
+            return self._json_error(400, "bad_target", "This UI never sends a request path like this.")
         if never_forward("GET" if method == "HEAD" else method, self.path):
             return self._json_error(403, "not_forwarded", "This UI never uses this route: it exposes secret values or raw files.")
         # Every forwarded request answers only pages served by this UI (or no page: curl, the address bar).

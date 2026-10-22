@@ -1468,6 +1468,8 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .ev-sys .ev-ic{background:var(--bg-3);color:var(--ink-3)}
 .target .tg-warn{display:inline-flex}
 .target .tg-warn svg{color:var(--warn)}
+.target .tg-end{display:inline-flex}
+.target .tg-end svg{color:var(--ink-4)}
 .hr-conn .hr-t{color:var(--ink)}
 .hr-conn.k-down{border-color:rgb(230 131 136 / .3)}
 
@@ -1727,7 +1729,7 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
 .cs-modes .set-choice{padding:10px 12px;border-radius:12px}
 .ch-confirm{width:min(720px,100%);margin:0 auto 10px;display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-radius:16px;background:color-mix(in srgb,var(--warn) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--warn) 30%,var(--hair));font-size:var(--fs-base);color:var(--ink-2)}
 .ch-confirm b{color:var(--ink)}
-.target>span:not(.tg-t):not(.tg-warn):not(.tg-ch){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.target>span:not(.tg-t):not(.tg-warn):not(.tg-end):not(.tg-ch){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .target .tg-ch{flex:none}
 /* Phone: every target at least 36 px tall. Kept last so it wins over the base sizes above. */
 @media (max-width:760px){
@@ -1743,6 +1745,12 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
   .kr-k{min-height:36px}
 }
 @media (max-width:760px){.hr-ev.k-stopped .hr-s{display:block;min-width:0;white-space:nowrap}}
+/* phone: a failure with its own button ("Put my message back", "Retry") keeps its reason, on a second row */
+@media (max-width:760px){
+  .hr-ev.k-stopped.has-undo{flex-wrap:wrap;row-gap:2px;height:auto;min-height:34px;padding:5px 6px 6px 12px;border-radius:17px}
+  .hr-ev.k-stopped.has-undo .hr-undo{margin-left:auto}
+  .hr-ev.k-stopped.has-undo .hr-s{order:3;flex:1 1 100%;white-space:normal;overflow:visible}
+}
 /* Send now: its own toggle beside a running chat's line; pressed, it reads as a choice you made */
 .tg-now{flex:none;display:inline-flex;align-items:center;height:30px;padding:0 12px;margin-right:6px;border-radius:999px;border:1px solid var(--g26);color:var(--ink-3);font:500 var(--fs-sm)/1 var(--sans);transition:background var(--dur-fast),color var(--dur-fast),border-color var(--dur-fast)}
 .tg-now:hover{color:var(--ink);border-color:var(--g33)}

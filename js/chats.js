@@ -222,7 +222,8 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
     }
     const s = session(v.slice(2));
     if (!s) return "";
-    if (s.retired_at) return `<span class="tg-warn">${ICON.pause}</span><span>This chat has ended. Start a new one from Chats.</span>`;
+    // neutral, not amber: nothing waits on you, and nothing resumes
+    if (s.retired_at) return `<span class="tg-end">${ICON.stop}</span><span>Ended. Start a new one from Chats.</span>`;
     if (BUSY.has(s.state)) {
       const rt = runtime(s.agent);
       const steer = (feature(rt, "send_while_running") || {}).behaviour === "steered";
@@ -370,7 +371,7 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
     open(v) { if (v === "chats") loadList(); else if (v.startsWith("c:")) loadChat(v.slice(2)); },
     items: (v) => (v === "chats" ? listItems() : chatItems(v.slice(2))),
     headHtml, targetHtml, confirmHtml, resolveConfirm, nowState,
-    placeholder: (v) => (v === "chats" ? "Ask anything to start a chat…" : "Reply in this chat…"),
+    placeholder: (v) => (v === "chats" ? "Ask anything to start a chat…" : session(v.slice(2))?.retired_at ? "This chat has ended" : "Reply in this chat…"),
     session: (v) => (v && v.startsWith("c:") ? session(v.slice(2)) : null),
     busy: (v) => { const s = v && v.startsWith("c:") ? session(v.slice(2)) : null; return !!(s && BUSY.has(s.state)); },
     /** Working now (not waiting on you): the typing line shows only then. */

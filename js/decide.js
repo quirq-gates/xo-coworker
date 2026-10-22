@@ -656,7 +656,10 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     };
     frame._allow = tryAllow;
     frame._hint = (text) => hint(el, text);
-    frame._quiet = false; // a new card starts with its keys on (a pause belonged to the card before)
+    // a pause carries over to the card that takes this one's place: words still being typed must never land on
+    // it as keys (an item withdrawn or decided elsewhere mid-sentence); the new card says why its keys are paused
+    const carried = !!frame._quiet;
+    frame._quiet = false;
     // the card's letter keys paused (see cardKeys): the reason stays on the card until they are back
     frame._quietOn = (text) => {
       frame._quiet = true;
@@ -671,8 +674,13 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
       h.classList.remove("stay"); h.textContent = "";
       return true;
     };
-    frame.addEventListener("pointerdown", () => frame._quietOff());
-    frame.addEventListener("focusout", (e) => { if (!frame.contains(e.relatedTarget)) frame._quietOff(); });
+    if (!frame._quietWired) {
+      // once per frame (it outlives its cards): each call reaches the current card's _quietOff
+      frame._quietWired = true;
+      frame.addEventListener("pointerdown", () => frame._quietOff && frame._quietOff());
+      frame.addEventListener("focusout", (e) => { if (!frame.contains(e.relatedTarget) && frame._quietOff) frame._quietOff(); });
+    }
+    if (carried) frame._quietOn("A new ask took this one's place.");
     frame._n = n;
 
     const qform = el.querySelector("[data-qform]");
