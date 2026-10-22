@@ -888,7 +888,7 @@ function msgItems(conv, needs) {
       html = `<p class="m-note">${esc(m.text)}</p>`;
     } else if (m.who === "hist") {
       const h = m.h;
-      html = `<div class="day hist" role="separator">${h.loading ? `<span><i class="spin" aria-hidden="true"></i>Loading earlier messages…</span>` : h.all ? `<span>${h.capped ? "Showing the latest 1,000 messages" : "Beginning of the conversation"}</span>` : `<button type="button" class="hist-more" data-older>Earlier messages</button>`}</div>`;
+      html = `<div class="day hist" role="separator">${h.loading ? `<span><i class="spin" aria-hidden="true"></i>Loading earlier messages…</span>` : h.all ? `<span>${h.capped ? "Showing the latest 1,000 messages" : "Beginning of the conversation"}</span>` : h.olderError ? `<span>Couldn't load earlier messages</span><button type="button" class="hist-more" data-older>Try again</button>` : `<button type="button" class="hist-more" data-older>Earlier messages</button>`}</div>`;
     } else if (m.who === "event") {
       html = `<div class="ev ev-${m.tone || "ok"}"><span class="ev-ic">${m.tone === "back" ? ICON.rewind : m.tone === "stop" ? ICON.close : m.tone === "sys" ? ICON.pause : ICON.check}</span><span class="ev-t">${esc(m.text)}</span><time>${clock(m.at)}</time></div>`;
     } else if (m.who === "rec") {
@@ -902,6 +902,8 @@ function msgItems(conv, needs) {
 }
 
 // ── headers: Workspace, project (title + one sentence + the Now shelf), thread (+ checklist) ──
+/** hub #28: the Workspace's overview heads the page, always; the conversation opens on its newest
+ *  message below it, and earlier messages load in between as you scroll up. The title is the top bar's. */
 function wsHeadRender(needs) {
   const box = $("#ws-head");
   if (S.view !== "ws") { box.hidden = true; return; }
@@ -913,7 +915,7 @@ function wsHeadRender(needs) {
   const asking = new Set(needs.map((n) => n.t.id));
   const idle = world.state.threads.filter((t) => t.state === "working" && !isBusy(t) && !asking.has(t.id)).length;
   const rs = R.rules();
-  const html = `<div class="wsh"><div class="wsh-mark">${XO}</div><h1 class="wsh-h" id="conv-title">Workspace</h1>` +
+  const html = `<div class="wsh"><div class="wsh-mark">${XO}</div><h2 class="wsh-h">Workspace</h2>` +
     `<p class="wsh-p">Your coordinator, across all ${projects().length} projects.</p>` +
     `<dl class="wsh-stats"><div><dt>Working</dt><dd>${working}</dd></div><div><dt>Need you</dt><dd class="${nd ? "is-amber" : ""}">${nd}</dd></div><div><dt>Can wait</dt><dd>${P0.held.length}</dd></div>${idle ? `<div><dt>Idle</dt><dd>${idle}</dd></div>` : ""}<div><dt>Finished today</dt><dd class="is-green">${doneToday().length}</dd></div></dl>` +
     (sealed() ? `<p class="wsh-calm">${ICON.moon}Sealed until morning. Ask for anything; nothing will ask you back tonight.</p>`
@@ -928,7 +930,7 @@ function topRender(needs) {
   const v = S.view;
   const t = convThread(v);
   const top = $("#top");
-  top.dataset.kind = v === "ws" ? "ws" : t ? "thread" : "project";
+  top.dataset.kind = t ? "thread" : "project"; // hub #28: the Workspace has a project's header, always shown
   // a thin state line along the thread's header: amber needs you, blue working, green done, red stopped
   top.dataset.state = !t ? "" : needs.some((n) => n.t.id === t.id && n.admitted) ? "need" : t.state === "failed" ? "stop" : isBusy(t) ? "busy" : t.state === "done" || t.state === "resolved" ? "done" : "";
   const back = $("#top-back");
@@ -951,8 +953,19 @@ function topRender(needs) {
     back.title = "Back (Esc)";
   }
   let who, end = "";
-  if (v === "ws") who = `<span class="tw-mini">${XO}</span><span class="tw-t"><b>Workspace</b></span>`;
-  else if (v.startsWith("p:")) {
+  if (v === "ws") {
+    // hub #28: a normal chat's header, like a project's: the counts in one line, what needs you one click away
+    const P0 = homeParts(needs);
+    const nd = sealed() ? 0 : P0.active.length;
+    const asking = new Set(needs.map((n) => n.t.id));
+    const working = world.state.threads.filter(isBusy).length;
+    const idle = world.state.threads.filter((x) => x.state === "working" && !isBusy(x) && !asking.has(x.id)).length;
+    const done = doneToday().length;
+    const parts = sealed() ? ["Sealed until morning"]
+      : [nd && `<b class="is-amber">${nd} need${nd === 1 ? "s" : ""} you</b>`, working && `${working} working`, P0.held.length && `${P0.held.length} can wait`, idle && `${idle} idle`, done && `${done} finished today`].filter(Boolean);
+    who = `<span class="tw-ic tw-xo" aria-hidden="true">${XO}</span><span class="tw-t"><h1 id="conv-title">Workspace</h1><span class="pj-s">${parts.join(" · ") || "All quiet"} · across ${projects().length} projects</span></span>`;
+    end = !sealed() && P0.next ? `<button type="button" class="all-btn is-need" data-decide="${esc(P0.next.key)}" title="${esc(askShort(P0.next))}">Next move<span>${nd}</span></button>` : "";
+  } else if (v.startsWith("p:")) {
     const pid = v.slice(2);
     const ts = threadsOf(pid);
     const every = world.state.threads.filter((x) => x.project === pid); // resolved ones too: findable, reopenable
@@ -1827,6 +1840,8 @@ function editFailed(id) {
 
 // ── render ──────────────────────────────────────────────────────────────────
 const scroller = $("#scroller"), msgsEl = $("#msgs");
+// the oldest message on screen; day lines don't count, since older messages of the same day land below theirs
+const FIRST_MSG = "[data-k]:not([data-k=hist]):not([data-k=note]):not([data-k^='day|'])";
 let rendered = null, raf = 0;
 function schedule() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); }
 const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
@@ -1857,10 +1872,10 @@ function render() {
       S.filled = ready ? v : null;
     }
     const atBottom = switching || nearBottom();
-    const first0 = msgsEl.querySelector("[data-k]:not([data-k=hist]):not([data-k=note])")?.dataset.k;
+    const first0 = msgsEl.querySelector(FIRST_MSG)?.dataset.k;
     const h0 = scroller.scrollHeight, top0 = scroller.scrollTop;
     const added = reconcile(msgsEl, msgItems(v, needs), { quiet: switching });
-    if (!DEMO && !switching && !atBottom && first0 && msgsEl.querySelector("[data-k]:not([data-k=hist]):not([data-k=note])")?.dataset.k !== first0) {
+    if (!DEMO && !switching && !atBottom && first0 && msgsEl.querySelector(FIRST_MSG)?.dataset.k !== first0) {
       // older messages arrived above: keep what you were reading exactly where it was
       scroller.scrollTop = top0 + (scroller.scrollHeight - h0);
     }
@@ -1870,13 +1885,13 @@ function render() {
       rendered = v;
       stuck = true;
       const pos = S.scroll[v];
-      if (v === "ws" && pos == null) { scroller.scrollTop = 0; stuck = false; }
-      else if (pos == null || pos === "bottom") toBottom(false); else scroller.scrollTop = pos;
+      if (pos == null || pos === "bottom") toBottom(false); else scroller.scrollTop = pos;
       $("#new-below").hidden = true;
     } else if (added.length || typed) {
       if (atBottom) toBottom(true); else if (added.length) $("#new-below").hidden = false;
     }
   }
+  if (!isHome) requestAnimationFrame(loadAhead);
   dockRender(needs);
   heraldRender(needs);
   chatTargetRender();
@@ -1887,9 +1902,17 @@ function render() {
   const nd = sealed() ? 0 : needs.filter((n) => n.admitted && !n.later).length;
   document.title = sealed() ? "Sealed · XO Space" : Kit.titleFor(nd, "XO Space");
 }
+/** live: earlier messages load before you reach them (hub #28). Within about a screen of the top, the next
+ *  page is fetched, and it lands above what you're reading without moving it; a first page too short to
+ *  scroll keeps loading until it fills the view or the conversation begins. */
+function loadAhead() {
+  if (DEMO || rendered !== S.view || S.view === "home" || convThread(S.view) || CH.isChats(S.view)) return;
+  if (scroller.scrollTop > Math.max(600, scroller.clientHeight)) return;
+  const c = chatOf(S.view); const h = c && world.state.hist[c];
+  if (h && h.loaded && !h.all && !h.loading && !h.olderError) world.act.loadOlder(c);
+}
 scroller.addEventListener("scroll", () => {
-  // live: reaching the top loads earlier messages (the API's newest-N window grows: 40, 80, 160…)
-  if (!DEMO && scroller.scrollTop < 80 && rendered === S.view && !convThread(S.view)) { const c = chatOf(S.view); const h = c && world.state.hist[c]; if (h && !h.all && !h.loading && !h.error) world.act.loadOlder(c); }
+  loadAhead();
   if (nearBottom()) $("#new-below").hidden = true;
   $("#top").classList.toggle("is-scrolled", scroller.scrollTop > 120);
 }, { passive: true });

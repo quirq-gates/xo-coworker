@@ -369,11 +369,10 @@ body.panel-open .conv{--rp:calc(var(--pw) + 28px)}
    as a thin strip in the middle, All threads on the right. */
 .top[data-kind="project"]{gap:20px;padding:14px calc(var(--hg) + var(--rp)) 14px var(--hg);border-bottom:1px solid var(--g1C)}
 .top[data-kind="project"] .top-who{flex:0 1 auto;min-width:120px;max-width:min(calc(34% + 46px),426px)}
+.app[data-view="ws"] .top .top-who{flex:1;max-width:none} /* no Now strip beside it: its line can run */
 .top-end{flex:none;display:flex;align-items:center;margin-left:auto}
 .top-end:empty{display:none}
 .top[data-kind="thread"]{flex-direction:column;align-items:stretch;gap:3px;padding:12px calc(var(--hg) + var(--rp)) 8px var(--hg)}
-.top[data-kind="ws"]{position:absolute;left:0;right:0;top:0;min-height:52px;background:transparent;pointer-events:none;opacity:0;transition:opacity .22s,background .22s}
-.top[data-kind="ws"].is-scrolled{opacity:1;pointer-events:auto;background:color-mix(in srgb,var(--canvas) 88%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--g1E)}
 .top-back{align-self:flex-start;display:inline-flex;align-items:center;gap:3px;height:22px;padding:0 6px 0 0;margin-left:-3px;border-radius:6px;color:var(--ink-4);font-size:var(--fs-sm);transition:color var(--dur-fast),transform 90ms var(--press)}
 .top-back:hover{color:var(--ink)}
 .top-back:active{transform:scale(.96)}
@@ -394,7 +393,9 @@ body.panel-open .conv{--rp:calc(var(--pw) + 28px)}
 .ck-br{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-4)}
 .ck-br svg{width:12px;height:12px}
 .tw-mini .xo-mark{display:block;width:30px;height:12px}
-.top[data-kind="ws"] .tw-t{flex-direction:row;align-items:baseline;gap:10px}
+.tw-xo .xo-mark{display:block;width:22px;height:9px}
+.all-btn.is-need{border-color:color-mix(in srgb,var(--warn) 40%,var(--g26));color:var(--ink)}
+.all-btn.is-need span{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
 .badge{flex:none;display:inline-flex;align-items:center;gap:7px;height:24px;padding:0 10px;border-radius:999px;font:600 var(--fs-sm)/1 var(--sans);background:color-mix(in srgb,var(--st,var(--ink-4)) 12%,transparent);color:var(--st,var(--ink-3))}
 .st-working{--st:var(--info)}.st-needs_reply,.st-needs_approval{--st:var(--warn)}.st-done{--st:var(--accent)}.st-failed{--st:var(--err-ink)}.st-resolved{--st:var(--ink-4)}
 
@@ -458,8 +459,7 @@ body.panel-open .conv{--rp:calc(var(--pw) + 28px)}
 @keyframes col-r{from{opacity:0;transform:translateX(18px)}}
 @keyframes col-l{from{opacity:0;transform:translateX(-18px)}}
 
-/* the Workspace: the coordinator's place gets a calm overview at its head */
-.app[data-view="ws"] .scroller{padding-top:0}
+/* the Workspace: its overview heads the page; the conversation below loads older messages as you scroll up (hub #28) */
 .ws-head{padding:clamp(40px,8vh,84px) 0 30px}
 .wsh{position:relative}
 .wsh-mark{position:relative;display:inline-grid;place-items:center;width:64px;height:64px;border-radius:20px;background:var(--g19);border:1px solid var(--g26);box-shadow:0 16px 40px rgb(0 0 0 / calc(.35 * var(--sha))),0 1px 0 rgba(255,255,255,.04) inset}
@@ -1467,7 +1467,6 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
   .top[data-kind="project"] .tw-t h1{font-size:19px}
   .top[data-kind="project"] .tw-ic{align-self:flex-start;width:30px;height:30px;border-radius:9px}
   .top[data-kind="project"] .tw-ic svg{width:16px;height:16px}
-  .top[data-kind="ws"]{top:0}
   .all-btn{align-self:flex-start;margin-top:2px;padding:0 4px 0 10px}
   .pj-s{white-space:normal}
   .nw{max-width:72vw}
