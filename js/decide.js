@@ -889,7 +889,12 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
   function skip(dir) {
     if (F.busy || F.done || F.vig) return;
     const nx = nextPending(F.cur, dir);
-    if (nx) { F.cur = nx; show(nx, dir > 0 ? "skip-fwd" : "skip-back"); }
+    if (!nx) return;
+    // moving on is the person's own act: the next card's keys are on (a pause carries over only when an
+    // item leaves under them)
+    const fr = $("#card");
+    if (fr && fr._quietOff) fr._quietOff();
+    F.cur = nx; show(nx, dir > 0 ? "skip-fwd" : "skip-back");
   }
 
   function confirmAll() {
