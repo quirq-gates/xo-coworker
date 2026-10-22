@@ -241,7 +241,7 @@ export function hopLine(h, project) {
   switch (h.kind) {
     case "forward": return `Forwarded by the Workspace${state}`;
     case "brief": return `${via.includes("workspace") ? "Forwarded by the Workspace, via the project" : `From ${from}`}${state}`;
-    case "relay": return h.from_role === "project-coordinator" && h.to_role === "thread" ? `The ${project} coordinator passed on your message${state}` : `${up(from)} wrote to ${to}${forThread}${state}`;
+    case "relay": return h.from_role === "project-coordinator" && h.to_role === "thread" && (h.message_ids || []).length ? `The ${project} coordinator passed on your message${state}` : `${up(from)} wrote to ${to}${forThread}${state}`;
     case "ask": return `${up(from)} asked ${to}${forThread}${state}`;
     case "status": return `${up(from)} reported back to ${to}${state}`;
     case "answer": return `${up(from)} answered ${to}`;

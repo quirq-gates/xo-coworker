@@ -28,8 +28,8 @@ const BIG_BACK = `<svg viewBox="0 0 52 52" aria-hidden="true"><circle class="sc"
 const MARK = (s) => (s === "done" ? "✓" : s === "doing" ? "✱" : "○");
 // capitalise a plain lowercase sentence ("the agent asks…"), never a name or a path ("perm-test.txt")
 // a sentence starting with a command ("git push…", "npm install…") stays as written
-const COMMANDS = new Set(["git", "npm", "npx", "pnpm", "yarn", "bun", "deno", "node", "python", "python3", "pip", "pip3", "uv", "rm", "mv", "cp", "ls", "cd", "cat", "curl", "wget", "make", "docker", "kubectl", "go", "cargo", "rustc", "sudo", "chmod", "chown", "mkdir", "touch", "sed", "awk", "grep", "find", "ssh", "scp", "tar", "brew", "apt", "gh", "terraform"]);
-const cap = (s) => { const t = String(s || "").trim(); const w = (t.match(/^[a-z]+(?= )/) || [])[0]; return w && !COMMANDS.has(w) ? t.charAt(0).toUpperCase() + t.slice(1) : t; };
+const COMMANDS = new Set(["git", "npm", "npx", "pnpm", "yarn", "bun", "deno", "node", "python", "python3", "pip", "pip3", "uv", "rm", "mv", "cp", "ls", "cd", "cat", "curl", "wget", "docker", "kubectl", "cargo", "rustc", "sudo", "chmod", "chown", "mkdir", "touch", "sed", "awk", "grep", "ssh", "scp", "tar", "brew", "apt", "gh", "terraform"]);
+const cap = (s) => { const t = String(s || "").trim(); const w = (t.match(/^[a-z]+(?= |$)/) || [])[0]; return w && !COMMANDS.has(w) ? t.charAt(0).toUpperCase() + t.slice(1) : t; };
 const ord = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
 
 export function createDecisions({ world, P, rules, PROJ, announce, render, later, waitSince, absorbing, onOpenThread, onAllClear, onUndone, onBreak, onSent, onNotSent }) {
@@ -656,6 +656,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     };
     frame._allow = tryAllow;
     frame._hint = (text) => hint(el, text);
+    frame._quiet = false; // a new card starts with its keys on (a pause belonged to the card before)
     // the card's letter keys paused (see cardKeys): the reason stays on the card until they are back
     frame._quietOn = (text) => {
       frame._quiet = true;

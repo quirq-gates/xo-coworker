@@ -103,14 +103,17 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
     h.loading = true; schedule();
     try {
       let s = session(sid);
+      if (s && s.agent) ensureModels(s.agent); // model names in words in the header
       if (!s || !s.native_id || s.cwd === undefined) {
         const full = await api.session(sid).catch(() => null);
         if (full) { world.state.sessions[sid] = { ...(session(sid) || {}), ...full }; s = session(sid); }
       }
       if (!s) throw new Error("This chat isn't here any more.");
       const trimmed = world.act.takeTrimmed ? world.act.takeTrimmed(sid) : false;
+      h.tried = s.native_id || null; // tried once for this id, whatever the answer
       const [m] = await Promise.all([
-        s.native_id ? api.observedMessages(s.native_id, { offset: 0, limit: 1000 }) : null,
+        // whole: observation pages only from an offset, oldest first, so a limit would drop the newest prompts
+        s.native_id ? api.observedMessages(s.native_id) : null,
         (!h.turns || trimmed) && world.act.loadTurns ? world.act.loadTurns(sid) : null,
       ]);
       h.turns = true;
@@ -127,6 +130,8 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
   // a turn that starts in the open chat may carry a prompt sent from elsewhere: read the history again
   const turnCount = new Map();
   if (live && world.subscribe) world.subscribe(() => {
+    // a "send now" chosen for a turn ends with that turn, wherever you are when it ends
+    if (C.now && !BUSY.has((session(C.now) || {}).state)) C.now = null;
     const v = view && view();
     if (!v || !v.startsWith("c:")) return;
     const sid = v.slice(2);
@@ -134,9 +139,10 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
     const before = turnCount.get(sid);
     turnCount.set(sid, n);
     if (before != null && n > before) setTimeout(() => loadChat(sid), 1500);
-    // the CLI attached after the chat opened: its history can be read now
+    // the CLI attached after the chat opened: its history can be read now (once per native id; an error
+    // waits for the next open, so a struggling server is never asked again and again)
     const s = session(sid), h = C.hist.get(sid);
-    if (s && s.native_id && h && !h.loaded && !h.loading) loadChat(sid);
+    if (s && s.native_id && h && !h.loaded && !h.loading && h.tried !== s.native_id) loadChat(sid);
   });
   function chatItems(sid) {
     const s = session(sid);
@@ -176,7 +182,7 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
     const s = session(v.slice(2));
     if (!s) return `<span class="tw-t"><h1 id="conv-title">Chat</h1></span>`;
     const busy = BUSY.has(s.state), wait = waiting(s);
-    const st = wait ? ["needs_approval", "needs_approval", "Needs you"] : busy ? ["working", "working", "Working"] : ["resolved", "idle", "Idle"];
+    const st = s.retired_at ? ["resolved", "done", "Ended"] : wait ? ["needs_approval", "needs_approval", "Needs you"] : busy ? ["working", "working", "Working"] : ["resolved", "idle", "Idle"];
     return `<span class="tw-t"><h1 id="conv-title">${esc(titleFor(s))}</h1><span class="pj-s">${esc(metaLine(s))}</span></span>` +
       `<span class="badge st-${st[0]}"><i class="g g-${st[1]}" aria-hidden="true"></i>${st[2]}</span>`;
   }
@@ -216,6 +222,7 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
     }
     const s = session(v.slice(2));
     if (!s) return "";
+    if (s.retired_at) return `<span class="tg-warn">${ICON.pause}</span><span>This chat has ended. Start a new one from Chats.</span>`;
     if (BUSY.has(s.state)) {
       const rt = runtime(s.agent);
       const steer = (feature(rt, "send_while_running") || {}).behaviour === "steered";
@@ -325,7 +332,11 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
       } else {
         local.status = "failed"; local.errTitle = err.code === "auth_required" ? "The agent isn't connected" : err.status === 501 ? "This agent can't chat yet" : err.status === 0 || err.status === 502 ? "Can't reach XO" : "Not sent"; local.err = err.message;
         // a new chat has nowhere to show a failed message: your words go back into the composer
-        if (!sid) { heraldShow({ kind: "stopped", text: local.errTitle, sub: `${err.message} Your message is back in the box.` }, 7000); restore && restore(local.body.text); }
+        if (!sid) {
+          const back = restore ? restore(local.body.text) : false;
+          if (back) heraldShow({ kind: "stopped", text: local.errTitle, sub: `${err.message} Your message is back in the box.` }, 7000);
+          else heraldShow({ kind: "stopped", text: local.errTitle, sub: err.message, undo: () => restore && restore(local.body.text, { force: true }), undoLabel: "Put my message back" }, 12000);
+        }
       }
     }
     schedule();
@@ -362,6 +373,10 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
     placeholder: (v) => (v === "chats" ? "Ask anything to start a chat…" : "Reply in this chat…"),
     session: (v) => (v && v.startsWith("c:") ? session(v.slice(2)) : null),
     busy: (v) => { const s = v && v.startsWith("c:") ? session(v.slice(2)) : null; return !!(s && BUSY.has(s.state)); },
+    /** Working now (not waiting on you): the typing line shows only then. */
+    working: (v) => { const s = v && v.startsWith("c:") ? session(v.slice(2)) : null; return !!(s && BUSY.has(s.state) && !waiting(s)); },
+    /** Why this chat can't take a message, if it can't. */
+    blocked: (v) => { const s = v && v.startsWith("c:") ? session(v.slice(2)) : null; return s && s.retired_at ? "This chat has ended" : ""; },
     send, openSetup, closeSetup, setPref, renderSetup,
     toggleNow: (v) => { const sid = v.slice(2); const s = session(sid); if (!s || !offers(runtime(s.agent), "interrupt")) return; C.now = C.now === sid ? null : sid; schedule(); },
     retry(id) { for (const [sid, list] of C.local) { const l = list.find((x) => x.id === id); if (l) { deliver(l, sid); return; } } },

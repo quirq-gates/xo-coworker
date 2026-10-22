@@ -164,7 +164,15 @@ const CH = createChats({
   world, announce, heraldShow: (...a) => heraldShow(...a), go: (...a) => go(...a), schedule: () => schedule(),
   view: () => S.view,
   // a new chat that was refused: your words go back into an empty composer on the Chats page
-  restore: (text) => { if (S.view === "chats" && !say.value.trim()) { say.value = text; growSay(); saveDraft(); updateComposer(); } },
+  restore: (text, { force = false } = {}) => {
+    if (force && S.view !== "chats") go("chats");
+    if (S.view !== "chats") return false;
+    const now = say.value.trim();
+    if (now && !force) return false;
+    say.value = now ? `${text}\n\n${now}` : text;
+    growSay(); saveDraft(); updateComposer(); say.focus();
+    return true;
+  },
 });
 world.ui = { tbOpen: S.tbOpen }; // turn blocks open or folded, shared with the Chats view
 
@@ -1098,21 +1106,17 @@ function closeRuns() {
 // Stops waiting out their Undo. One herald shows them all, so a second stop never hides the first's Undo.
 const pendingStops = [];
 function stopRunsUndo(what, fn) {
-  const job = { what, cancelled: false };
+  const job = { what, until: Date.now() + Kit.COMMIT_MS, cancelled: false, sent: false };
   pendingStops.push(job);
-  const showPending = () => {
-    const left = pendingStops.filter((j) => !j.cancelled);
-    if (!left.length) return;
-    heraldShow({ kind: "halt", tag: "runstop", text: "Stopping", sub: left.map((j) => j.what).join(", "), undo: () => { for (const j of left) j.cancelled = true; pendingStops.length = 0; announce(left.length > 1 ? "Not stopped. They keep working." : "Not stopped."); } }, Kit.COMMIT_MS);
-  };
-  showPending();
+  stopsHerald();
   announce(`Stopping ${what} in 3 seconds. Undo to keep it.`);
   setTimeout(async () => {
     const i = pendingStops.indexOf(job);
     if (i >= 0) pendingStops.splice(i, 1);
     if (job.cancelled) return;
-    // its Undo is over: the herald keeps only the stops still waiting (or clears, for the result)
-    if (pendingStops.some((j) => !j.cancelled)) showPending(); else if (S.herald && S.herald.tag === "runstop") S.herald = null;
+    job.sent = true;
+    stopsHerald(); // its Undo is over: the line keeps only the stops still waiting
+
     try {
       const r = await fn();
       // 202: a stop was sent (its run.finished confirms it); 200 with nothing to stop: it had ended
@@ -1237,7 +1241,7 @@ function typingRender() {
     html = `<div class="typing" role="status"><div class="av av-w">${XO}</div><div class="ty-b"><span class="shimmer">${who} is ${aw ? "replying" : "working"}${doing ? ` · ${esc(doing.replace(/`/g, ""))}` : ""}</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>${aw ? `<span class="elapsed" data-since="${aw.at}"></span>` : ""}</div></div>`;
   } else if (!DEMO && S.view.startsWith("c:")) {
     const sid = S.view.slice(2), tu = world.state.turns && world.state.turns.running(sid);
-    if (CH.busy(S.view) && !(tu && world.state.turns.blocksOf(tu).length)) html = `<div class="typing" role="status"><div class="av av-t av-w">${ICON.thread}</div><div class="ty-b"><span class="shimmer">Working</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>`;
+    if (CH.working(S.view) && !(tu && world.state.turns.blocksOf(tu).length)) html = `<div class="typing" role="status"><div class="av av-t av-w">${ICON.thread}</div><div class="ty-b"><span class="shimmer">Working</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></div></div>`;
   } else if (!DEMO && t && t.sessionId && world.state.turns && world.state.turns.running(t.sessionId) && world.state.turns.blocksOf(world.state.turns.running(t.sessionId)).length) {
     html = ""; // its running turn shows the work itself
   } else if (S.typing[S.view]) {
@@ -1256,16 +1260,37 @@ setInterval(tickElapsed, 1000);
 
 // ── the dock line: one calm labelled line (no glow on the composer, ever) ───
 const OWN = new Set(["sent", "started", "ready", "clear", "rec", "rule", "halt"]);
+// Lines waiting for an Undo on screen to end: an Undo is never pushed out of reach by a newer line.
+const HQ = [];
 function heraldShow(h, ms = 4200) {
-  const cur = S.herald && S.herald.until > Date.now() ? S.herald : null;
-  // a correction ("Not sent") replaces your own action's line, but never one still holding an Undo:
-  // it waits until that Undo is over, so the Undo stays in reach
-  if (h.force && cur && cur.undo && !h.undo) { clearTimeout(heraldShow.wait); heraldShow.wait = setTimeout(() => heraldShow(h, ms), cur.until - Date.now() + 60); return; }
-  if (!h.force && cur && (OWN.has(cur.kind) || cur.undo) && !OWN.has(h.kind) && !h.undo) return;
+  const now = Date.now();
+  const cur = S.herald && S.herald.until > now ? S.herald : null;
+  const stops = h.tag === "stops";
+  if (cur && cur.undo && !(stops && cur.tag === "stops")) {
+    if (stops) {
+      // a Stop's own Undo shows at once (its 3 s are already running); the line it covers comes back after
+      HQ.unshift({ h: cur, ms: Math.max(3000, cur.until - now) });
+    } else if (h.undo || h.force || OWN.has(h.kind)) { HQ.push({ h, ms }); return; }
+    else return; // a passing notice yields to an Undo
+  }
+  if (!h.force && !h.undo && !stops && cur && OWN.has(cur.kind) && !OWN.has(h.kind)) return;
+  heraldPut(h, ms);
+}
+function heraldPut(h, ms) {
   S.herald = { ...h, until: Date.now() + ms, n: (S.herald?.n || 0) + 1 };
   clearTimeout(heraldShow.t);
-  heraldShow.t = setTimeout(schedule, ms + 40);
+  heraldShow.t = setTimeout(heraldNext, ms + 40);
   schedule();
+}
+/** The line on screen ended (or was cleared): the next waiting line, Undo lines first, in order; of those
+ *  without one only the newest shows (each was already announced). */
+function heraldNext() {
+  if (S.herald && S.herald.until > Date.now() && S.herald.undo) return;
+  const iu = HQ.findIndex((x) => x.h.undo);
+  let next = null;
+  if (iu >= 0) next = HQ.splice(iu, 1)[0];
+  else if (HQ.length) { next = HQ[HQ.length - 1]; HQ.length = 0; }
+  if (next) heraldPut(next.h, next.ms); else schedule();
 }
 function heraldRender(needs) {
   const box = $("#herald");
@@ -1468,6 +1493,22 @@ say.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); say.blur(); }
 });
 atList.addEventListener("mousedown", (e) => { const li = e.target.closest("li"); if (li) { e.preventDefault(); pickAt(li.dataset.pid); } });
+// On Home an empty composer shrinks when it loses focus, which drops the dock (and the herald just above it)
+// 45 px under the pointer, so the click lands on nothing. Keep its shape from the press until the click.
+{
+  const comp = $("#composer");
+  let timer = 0;
+  const release = (ms) => { clearTimeout(timer); timer = setTimeout(() => comp.classList.remove("held"), ms); };
+  document.addEventListener("pointerdown", (e) => {
+    if (!comp.contains(document.activeElement) || comp.contains(e.target)) return;
+    clearTimeout(timer);
+    comp.classList.add("held");
+  }, true);
+  // a touch's click can come a moment after the finger lifts, so wait for it (or give up shortly after)
+  document.addEventListener("pointerup", () => { if (comp.classList.contains("held")) release(600); }, true);
+  document.addEventListener("pointercancel", () => { if (comp.classList.contains("held")) release(0); }, true);
+  document.addEventListener("click", () => { if (comp.classList.contains("held")) release(0); }, true);
+}
 $("#composer").addEventListener("submit", (e) => { e.preventDefault(); if ($("#send").dataset.mode === "stop") stopRun(); else send(); });
 $("#target").addEventListener("click", () => {
   if (S.view === "chats") { CH.openSetup($("#target")); return; }
@@ -1522,14 +1563,20 @@ function stopLive(run) {
     }
   }, Kit.COMMIT_MS);
 }
-/** One herald for every Stop still in its Undo window, so a second Stop never hides the first one's Undo. */
+/**
+ * One line for every stop still in its Undo window, a turn's (S.stops) or a sub-agent's (pendingStops),
+ * with one Undo for all: a second stop never hides the first one's Undo.
+ */
 function stopsHerald() {
-  const waiting = [...S.stops.values()].filter((x) => !x.cancelled && !x.sent);
-  if (!waiting.length) { if (S.herald && S.herald.tag === "turnstop") { S.herald = null; schedule(); } return; }
-  const last = Math.max(...waiting.map((x) => x.until));
-  heraldShow({ kind: "halt", tag: "turnstop", text: "Stopping", sub: waiting.map((x) => x.what).join(", "), undo: () => {
-    for (const x of waiting) { x.cancelled = true; if (S.stops.get(x.session) === x) S.stops.delete(x.session); }
-    announce(waiting.length > 1 ? "Not stopped. They keep working." : "Not stopped. It keeps working.");
+  const turns = [...S.stops.values()].filter((x) => !x.cancelled && !x.sent);
+  const runs = pendingStops.filter((j) => !j.cancelled && !j.sent);
+  const all = [...turns, ...runs];
+  if (!all.length) { if (S.herald && S.herald.tag === "stops") { S.herald.until = 0; heraldNext(); } return; }
+  const last = Math.max(...all.map((x) => x.until));
+  heraldShow({ kind: "halt", tag: "stops", text: "Stopping", sub: all.map((x) => x.what).join(", "), undo: () => {
+    for (const x of turns) { x.cancelled = true; if (S.stops.get(x.session) === x) S.stops.delete(x.session); }
+    for (const j of runs) { j.cancelled = true; const i = pendingStops.indexOf(j); if (i >= 0) pendingStops.splice(i, 1); }
+    announce(all.length > 1 ? "Not stopped. They keep working." : "Not stopped. It keeps working.");
     schedule();
   } }, Math.max(300, last - Date.now()));
 }
@@ -1572,7 +1619,7 @@ function lift(el, from) {
 /** Live: why sending is paused right now, or "" (classic composerBlock, in plain words). */
 function liveBlock() {
   if (DEMO) return CH.isChats(S.view) ? "Chats run in Live" : "";
-  if (CH.isChats(S.view)) return sendBlock(world.state, { timeline: false });
+  if (CH.isChats(S.view)) return CH.blocked(S.view) || sendBlock(world.state, { timeline: false });
   const t = convThread(S.view);
   const toThread = !!t && !/(^|\s)@[\w.-]+/.test(say.value);
   return sendBlock(world.state, { timeline: !toThread });
@@ -1958,7 +2005,7 @@ document.addEventListener("click", (e) => {
   if (fx) { FV.dismiss(fx.dataset.findX); announce("Put aside. It won't come back today."); schedule(); return; }
   const ru = t.closest("[data-rec-undo]");
   if (ru) { undoRecord(ru.dataset.recUndo); return; }
-  if (t.closest("[data-herald-undo]")) { const u = S.herald?.undo; if (typeof u === "function") { S.herald.until = 0; schedule(); u(); } else if (u) undoRecord(u); return; }
+  if (t.closest("[data-herald-undo]")) { const u = S.herald?.undo; if (typeof u === "function") { S.herald.until = 0; u(); heraldNext(); } else if (u) undoRecord(u); return; }
   // Chats: "send now" would stop background tasks; a failed prompt
   const chc = t.closest("[data-chc]");
   if (chc) { CH.resolveConfirm(S.view, chc.dataset.chc); return; }
@@ -2249,7 +2296,8 @@ function closeSettings({ restore = true } = {}) {
   setEl.hidden = true;
   $("#set-side").classList.remove("is-on");
   $("#set-side").setAttribute("aria-expanded", "false");
-  if (restore) setReturn?.focus?.({ preventScroll: true });
+  // back where you were; an opener that's gone or hidden (Jump's box) gives way to the composer
+  if (restore) (setReturn && setReturn.isConnected && setReturn.offsetParent ? setReturn : say)?.focus?.({ preventScroll: true });
 }
 $("#set-side").addEventListener("click", () => (setEl.hidden ? openSettings() : closeSettings()));
 $("#set-phone").addEventListener("click", openSettings);

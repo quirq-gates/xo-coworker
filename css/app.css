@@ -47,6 +47,8 @@
   --e-decide:#333333; --warm:#8A4B0B;
   --g14:#F6F6F6; --g16:#F1F1F1; --g17:#F1F1F1; --g18:#EEEEEE; --g19:#EEEEEE; --g1A:#FFFFFF; --g1B:#FFFFFF; --g1C:#FFFFFF; --g1D:#FFFFFF; --g1E:#FFFFFF; --g1F:#E7E7E7; --g20:#EFEFEF; --g21:#EFEFEF; --g22:#EFEFEF; --g23:#FFFFFF; --g24:#E2E2E2; --g25:#E2E2E2; --g26:#E2E2E2; --g27:#D6D6D6; --g29:#D6D6D6; --g2A:#D6D6D6; --g2B:#D6D6D6; --g2C:#D6D6D6; --g2E:#D6D6D6; --g30:#C9C9C9; --g33:#C9C9C9; --g36:#C9C9C9; --g38:#BBBBBB; --g3A:#BBBBBB; --g3C:#BBBBBB; --g40:#A2A2A2; --g45:#A2A2A2; --g4A:#A2A2A2; --g50:#8A8A8A; --g55:#8A8A8A; --g5F:#8A8A8A; --g6A:#787878; --g72:#787878;
 }
+/* "Increase contrast" in light: the stronger ink and lines of tokens.css win over this light theme's own */
+@media (prefers-contrast: more){:root[data-theme="light"]{--ink-3:#4B4B4B; --ink-4:#4B4B4B; --line:#8E8E8E; --line-hover:#6B6B6B}}
 :root[data-theme="light"] body{background:var(--side)}
 :root[data-theme="light"] .toast,:root[data-theme="light"] .toast .t-m b{color:#F2F2F2}
 :root[data-theme="light"] .toast .t-m{color:#BDBDBD}
@@ -608,10 +610,10 @@ button.hr:active{transform:scale(.97)}
 .composer textarea::placeholder{color:var(--g72)}
 .composer textarea:focus-visible{outline:none}
 .composer-row{display:flex;align-items:center;gap:6px;margin-top:6px}
-.app[data-view="home"] .composer:not(:focus-within):not(.has-text){grid-template-columns:minmax(0,1fr) auto;align-items:center;padding:7px 7px 7px 18px}
-.app[data-view="home"] .composer:not(:focus-within):not(.has-text) textarea{padding:5px 0 3px}
-.app[data-view="home"] .composer:not(:focus-within):not(.has-text) .composer-row{margin:0}
-.app[data-view="home"] .composer:not(:focus-within):not(.has-text) .target{display:none}
+.app[data-view="home"] .composer:not(:focus-within):not(.has-text):not(.held){grid-template-columns:minmax(0,1fr) auto;align-items:center;padding:7px 7px 7px 18px}
+.app[data-view="home"] .composer:not(:focus-within):not(.has-text):not(.held) textarea{padding:5px 0 3px}
+.app[data-view="home"] .composer:not(:focus-within):not(.has-text):not(.held) .composer-row{margin:0}
+.app[data-view="home"] .composer:not(:focus-within):not(.has-text):not(.held) .target{display:none}
 .target{display:inline-flex;align-items:center;gap:6px;min-width:0;height:30px;padding:0 10px 0 8px;margin-left:-8px;margin-right:auto;border-radius:9px;color:var(--ink-4);font-size:var(--fs-sm);white-space:nowrap;overflow:hidden;transition:background var(--dur-fast),color var(--dur-fast)}
 .target:hover{background:var(--bg-3);color:var(--ink-3)}
 .target b{color:var(--ink-2);font-weight:600}
@@ -1738,6 +1740,7 @@ button.kr-r:hover{background:var(--bg-3);color:var(--ink)}
   .hr.hr-need{min-height:36px}
   .rn-chip,.rn-log,.rn-stopall{height:36px}
   #say{min-height:36px}
+  .kr-k{min-height:36px}
 }
 @media (max-width:760px){.hr-ev.k-stopped .hr-s{display:block;min-width:0;white-space:nowrap}}
 /* Send now: its own toggle beside a running chat's line; pressed, it reads as a choice you made */

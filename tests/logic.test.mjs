@@ -57,7 +57,8 @@ t("a hop line names who sent it to whom, from the hop's own roles", () => {
   assert.equal(line({ kind: "relay", from_role: "thread", to_role: "project-coordinator" }), "This thread wrote to the demo-proj coordinator");
   assert.equal(line({ kind: "relay", from_role: "xo", to_role: "project-coordinator" }), "XO wrote to the demo-proj coordinator");
   assert.equal(line({ kind: "ask", from_role: "project-coordinator", to_role: "workspace-coordinator", via: ["thread", "project"] }), "The demo-proj coordinator asked the Workspace on behalf of this thread");
-  assert.equal(line({ kind: "relay", from_role: "project-coordinator", to_role: "thread" }), "The demo-proj coordinator passed on your message");
+  assert.equal(line({ kind: "relay", from_role: "project-coordinator", to_role: "thread", message_ids: ["cmsg_1"] }), "The demo-proj coordinator passed on your message");
+  assert.equal(line({ kind: "relay", from_role: "project-coordinator", to_role: "thread", message_ids: [] }), "The demo-proj coordinator wrote to this thread", "a relay with only a note is the coordinator writing");
   assert.equal(line({ kind: "ask", from_role: "xo", to_role: "project-coordinator", state: "sent" }), "XO asked the demo-proj coordinator · not taken up yet");
   assert.equal(line({ kind: "answer", from_role: "workspace-coordinator", to_role: "project-coordinator" }), "The Workspace answered the demo-proj coordinator");
   assert.equal(line({ kind: "status", from_role: "thread", to_role: "project-coordinator", state: "answered" }), "This thread reported back to the demo-proj coordinator · answered");
