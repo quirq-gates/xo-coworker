@@ -166,7 +166,7 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
         const m = x.m;
         const meta = m.status === "sending" ? `<div class="meta"><i class="spin" aria-hidden="true"></i>Sending</div>`
           : m.status === "held" ? `<div class="meta is-warn"><span>Waiting for your choice below</span></div>`
-          : m.status === "failed" ? `<div class="meta is-err"><span title="${esc(m.err || "")}">${esc(m.errTitle || "Not sent")}</span><button type="button" class="meta-btn" data-chat-retry="${esc(m.id)}">${ICON.retry}Retry</button></div>`
+          : m.status === "failed" ? `<div class="meta is-err"><span title="${esc(m.err || "")}">${esc(m.errTitle || "Not sent")}</span><button type="button" class="meta-btn" data-chat-retry="${esc(m.id)}">${ICON.retry}Retry</button><button type="button" class="meta-btn" data-chat-edit="${esc(m.id)}">${ICON.edit}Edit</button></div>`
           : m.added ? `<div class="meta"><span>Added to the turn in progress, not sent now</span>${BUSY.has(s.state) ? `<button type="button" class="meta-btn" data-chat-stop>${ICON.stop}Stop the turn</button>` : ""}</div>` : "";
         items.push({ key: `u:${m.id}`, html: `<div class="m m-you${m.status === "failed" ? " is-failed" : ""}"><div class="bubble">${esc(m.text)}</div>${meta}</div>` });
       } else {
@@ -331,7 +331,7 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
         C.confirm.set(sid, { local, sid, count: Number.isInteger(count) && count >= 0 ? count : 0 });
         local.status = "held";
       } else {
-        local.status = "failed"; local.errTitle = err.code === "auth_required" ? "The agent isn't connected" : err.status === 501 ? "This agent can't chat yet" : err.status === 0 || err.status === 502 ? "Can't reach XO" : "Not sent"; local.err = err.message;
+        local.status = "failed"; local.errTitle = err.code === "auth_required" ? "The agent isn't connected" : err.code === "timeout" ? "No answer from XO" : err.status === 501 ? "This agent can't chat yet" : err.status === 0 || err.status === 502 ? "Can't reach XO" : "Not sent"; local.err = err.message;
         // a new chat has nowhere to show a failed message: your words go back into the composer
         if (!sid) {
           const back = restore ? restore(local.body.text) : false;
@@ -381,6 +381,14 @@ export function createChats({ world, announce, heraldShow, go, schedule, view, r
     send, openSetup, closeSetup, setPref, renderSetup,
     toggleNow: (v) => { const sid = v.slice(2); const s = session(sid); if (!s || !offers(runtime(s.agent), "interrupt")) return; C.now = C.now === sid ? null : sid; schedule(); },
     retry(id) { for (const [sid, list] of C.local) { const l = list.find((x) => x.id === id); if (l) { deliver(l, sid); return; } } },
+    /** A failed message taken back to edit: it leaves the chat and its text is returned. */
+    edit(id) {
+      for (const list of C.local.values()) {
+        const i = list.findIndex((x) => x.id === id && x.status === "failed");
+        if (i >= 0) { const [l] = list.splice(i, 1); schedule(); return l.body.text; }
+      }
+      return null;
+    },
     get setupOpen() { return C.pop.open; },
   };
 }

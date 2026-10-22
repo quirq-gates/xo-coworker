@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { renderMarkdown, renderInline, threadLinks } from "../js/markdown.js";
 import { parseChecklist, tasksOf } from "../js/model.js";
+import { request } from "../js/api.js";
 import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
 
 let passed = 0;
@@ -155,6 +156,7 @@ t("send errors say what happened, in plain words", () => {
   assert.equal(sendErrorTitle({ status: 403 }), "Refused by the proxy");
   assert.equal(sendErrorTitle({ status: 502 }), "Can't reach XO");
   assert.equal(sendErrorTitle({ status: 400 }), "Message not sent");
+  assert.equal(sendErrorTitle({ code: "timeout", status: 0 }), "No answer from XO");
 });
 t("the connection line and the send block are honest", () => {
   const rt = [{ name: "claude_code", cli: { logged_in: true } }];
@@ -178,6 +180,36 @@ await (async () => {
   let peak = 0, now = 0;
   await mapLimit([1, 2, 3, 4, 5, 6, 7, 8, 9], 3, async () => { now++; peak = Math.max(peak, now); await new Promise((r) => setTimeout(r, 5)); now--; });
   t("mapLimit caps parallel fetches", () => assert.equal(peak, 3));
+})();
+
+// ── a request that never settles gives up (if1 #6) ─────────────────────────
+await (async () => {
+  const real = globalThis.fetch;
+  const seen = [];
+  // a fetch that never answers, but honours its signal, as a half-open connection does
+  globalThis.fetch = (url, opts) => new Promise((_, reject) => {
+    seen.push(opts);
+    opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+  });
+  try {
+    let err = null;
+    const t0 = Date.now();
+    try { await request("/chat/chats/x/messages", { method: "POST", body: { text: "hi", client_id: "ui_1" }, timeout: 60 }); } catch (e) { err = e; }
+    t("a write that never settles fails as a timeout", () => {
+      assert.ok(err && err.code === "timeout" && err.status === 0, String(err && err.code));
+      assert.equal(sendErrorTitle(err), "No answer from XO");
+      assert.ok(Date.now() - t0 < 1000);
+      assert.equal(JSON.parse(seen[0].body).client_id, "ui_1", "a retry is the same request");
+    });
+    const ctl = new AbortController();
+    const p = request("/chat/status", { signal: ctl.signal, timeout: 5000 });
+    ctl.abort();
+    let err2 = null;
+    try { await p; } catch (e) { err2 = e; }
+    t("a caller's own abort stays an AbortError, not a timeout", () => assert.equal(err2 && err2.name, "AbortError"));
+  } finally {
+    globalThis.fetch = real;
+  }
 })();
 
 // ── live data from storm (GET only: this suite never writes) ─────────────

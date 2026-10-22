@@ -47,7 +47,29 @@ export class ApiError extends Error {
 /** The storm codes that mean "storm can't be used in this server right now" (UI-reference §0.3). */
 export const STORM_DOWN = new Set(["engine_not_running", "engine_elsewhere", "engine_failed", "store_refused", "store_failed", "stream_not_running"]);
 
-async function request(path, { method = "GET", body, signal, query } = {}) {
+// How long a request may go unanswered before it gives up (if1 #6). A write that never settles
+// would stay "Sending" with no Retry; a read that never settles would stall its poll for good.
+export const WRITE_MS = 20000;
+export const READ_MS = 30000;
+
+/** One signal that aborts on the caller's signal or after `ms`; `timedOut()` says which. */
+function deadline(signal, ms) {
+  const ctl = new AbortController();
+  let late = false;
+  const t = setTimeout(() => { late = true; ctl.abort(); }, ms);
+  const onAbort = () => ctl.abort();
+  if (signal) {
+    if (signal.aborted) ctl.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+  return {
+    signal: ctl.signal,
+    timedOut: () => late,
+    done: () => { clearTimeout(t); if (signal) signal.removeEventListener("abort", onAbort); },
+  };
+}
+
+export async function request(path, { method = "GET", body, signal, query, timeout } = {}) {
   let url = BASE + path;
   if (query) {
     const q = new URLSearchParams();
@@ -55,6 +77,21 @@ async function request(path, { method = "GET", body, signal, query } = {}) {
     const qs = q.toString();
     if (qs) url += "?" + qs;
   }
+  const ms = timeout ?? (method === "GET" ? READ_MS : WRITE_MS);
+  const dl = deadline(signal, ms);
+  try {
+    return await exchange(url, method, body, dl.signal);
+  } catch (err) {
+    if (err && err.name === "AbortError" && dl.timedOut()) {
+      throw new ApiError(0, "timeout", `XO didn't answer in ${Math.round(ms / 1000)} s.`);
+    }
+    throw err;
+  } finally {
+    dl.done();
+  }
+}
+
+async function exchange(url, method, body, signal) {
   let res;
   try {
     res = await fetch(url, {

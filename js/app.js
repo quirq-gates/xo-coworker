@@ -2020,6 +2020,8 @@ document.addEventListener("click", (e) => {
   if (chc) { CH.resolveConfirm(S.view, chc.dataset.chc); return; }
   const chr = t.closest("[data-chat-retry]");
   if (chr) { CH.retry(chr.dataset.chatRetry); return; }
+  const che = t.closest("[data-chat-edit]");
+  if (che) { const text = CH.edit(che.dataset.chatEdit); if (text != null) { say.value = say.value.trim() ? `${text}\n\n${say.value}` : text; growSay(); saveDraft(); updateComposer(); say.focus(); } return; }
   if (e.target.closest("[data-chat-stop]")) { stopRun(); return; }
   // sub-agents: the strip under the checklist, the log, a sub-agent's row in a turn
   const rc = t.closest("[data-run-call]");

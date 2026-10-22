@@ -176,6 +176,7 @@ export function sendErrorTitle(err) {
   if (err.code === "coordinator_busy") return "The coordinator is busy";
   if (err.code === "thread_not_found" || err.code === "session_retired") return "This thread is gone";
   if (STORM_DOWN.has(err.code)) return "XO's chat engine isn't running";
+  if (err.code === "timeout") return "No answer from XO";
   if (err.status === 501) return "Not supported by this agent";
   if (err.status === 403) return "Refused by the proxy";
   if (err.status === 0 || err.status === 502) return "Can't reach XO";
