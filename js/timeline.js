@@ -186,6 +186,24 @@ export function sendErrorTitle(err) {
 const hhmm = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); };
 
 /**
+ * The pools that can hold work back now (if1 #1). A pool id is "<runtime>:<account>" (storm's
+ * pool_id); after a re-login the old account's pool stays listed, closed until its reset, but
+ * nothing runs on it. So a pool counts only when its account is the runtime's account now. A
+ * runtime whose account isn't known yet, and an id that isn't runtime:account, count as before.
+ */
+export function currentPools(pools, runtimes) {
+  const now = new Map();
+  for (const r of runtimes || []) if (r && r.name && r.cli && r.cli.account) now.set(r.name, r.cli.account);
+  return Object.entries(pools || {}).filter(([key, p]) => {
+    const id = String((p && p.pool) || key);
+    const i = id.indexOf(":");
+    if (i < 0) return true;
+    const acct = now.get(id.slice(0, i));
+    return !acct || acct === id.slice(i + 1);
+  }).map(([, p]) => p);
+}
+
+/**
  * The one honest line about the connection and what can run, or null when all is well.
  * w: {error, conn, statusError, statusCode, runtimes, router, pools, loaded}
  */
@@ -200,7 +218,7 @@ export function connLine(w) {
     return { kind: "off", text: `${cliName(r.name)} isn't connected`, sub: "connect it in XO · sending waits until then" };
   }
   if (w.router && w.router.mode === "off") return { kind: "off", text: "The router is off", sub: "new messages to the Workspace and projects are refused · threads still take replies" };
-  const pools = Object.values(w.pools || {});
+  const pools = currentPools(w.pools, rts);
   const closed = pools.find((p) => p.state === "closed");
   if (closed) return { kind: "wait", text: `Paused until ${hhmm(closed.resets_at)}`, sub: "usage limit · running work finishes, new work waits" };
   const paid = pools.find((p) => p.state === "paid");

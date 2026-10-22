@@ -13,7 +13,7 @@ import { api, clientId as newClientId, NEWEST, coderHeaders, STORM_DOWN } from "
 import { SSEStream } from "./sse.js";
 import { createTurns } from "./blocks.js";
 import { tasksOf } from "./model.js";
-import { uiMsg, mergeRows, stormAsks, mapLimit } from "./timeline.js";
+import { uiMsg, mergeRows, stormAsks, mapLimit, currentPools } from "./timeline.js";
 import { hostOf } from "./review.js";
 
 const STATUS_MS = 30000;          // the engine's status (pools, review counts); frames carry the rest
@@ -264,12 +264,23 @@ export function stormSource(state, emit, event) {
     try {
       state.status = await api.status();
       state.statusError = null; state.statusCode = null;
+      const fresh = (state.status.pools || []).some((p) => !(p.id in state.pools));
       for (const p of state.status.pools || []) state.pools[p.id] = { ...(state.pools[p.id] || {}), pool: p.id, state: p.state, resets_at: p.resets_at, paid_continue_until: p.paid_continue_until };
+      // A pool not seen before is a new account (a re-login), and while something holds work back
+      // the account may have changed under it: either way, read which account each runtime is on
+      // now rather than up to 5 min later, so an old account's pool stops pausing (if1 #1).
+      if (poolsSeen && (fresh || poolHeld())) refreshRuntimes();
+      poolsSeen = true;
     } catch (err) {
       state.statusError = err.message; state.statusCode = err.code;
     }
     emit();
     statusT = setTimeout(loadStatus, state.statusError ? STATUS_RETRY_MS : STATUS_MS);
+  }
+  let poolsSeen = false, runtimesBusy = null;
+  const poolHeld = () => currentPools(state.pools, state.runtimes).some((p) => p.state === "closed" || p.state === "paid");
+  function refreshRuntimes() {
+    if (!runtimesBusy) runtimesBusy = loadRuntimes().finally(() => { runtimesBusy = null; });
   }
   async function loadRuntimes() {
     clearTimeout(runtimesT);
@@ -473,7 +484,12 @@ export function stormSource(state, emit, event) {
         if (d.key === "router") { state.router = d.value; emit(); }
         break;
       case "pool":
-        if (d.pool) { state.pools[d.pool] = { ...(state.pools[d.pool] || {}), ...d }; emit(); }
+        if (d.pool) {
+          const fresh = !(d.pool in state.pools);
+          state.pools[d.pool] = { ...(state.pools[d.pool] || {}), ...d };
+          if (poolsSeen && fresh) refreshRuntimes();
+          emit();
+        }
         break;
       case "run.started": {
         const i = d.info || {};

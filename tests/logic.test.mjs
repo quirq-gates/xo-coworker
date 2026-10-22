@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { renderMarkdown, renderInline, threadLinks } from "../js/markdown.js";
 import { parseChecklist, tasksOf } from "../js/model.js";
 import { request } from "../js/api.js";
-import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
+import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
 
 let passed = 0;
 const t = (name, fn) => {
@@ -175,6 +175,23 @@ t("the connection line and the send block are honest", () => {
   assert.equal(connLine({ ...ok, pools: { p: { state: "warn" } } }), null, "warn only holds later work: no line");
   assert.equal(sendBlock({ ...ok, loaded: false }), "Connecting to XO…");
   assert.equal(connLine({ ...ok, error: null, errorCode: null }), null, "a recovered state has no line");
+});
+t("an old account's closed pool pauses nothing after a re-login (if1 #1)", () => {
+  const rt = (account) => [{ name: "claude_code", cli: { logged_in: true, account } }];
+  const pools = {
+    "claude_code:acct-70c53cc54fd1": { pool: "claude_code:acct-70c53cc54fd1", state: "open" },
+    "claude_code:acct-d6f9c7186766": { pool: "claude_code:acct-d6f9c7186766", state: "closed", resets_at: "2026-10-22T23:00:00Z" },
+  };
+  const base = { loaded: true, conn: "live", router: { mode: "auto" } };
+  assert.equal(connLine({ ...base, runtimes: rt("acct-70c53cc54fd1"), pools }), null, "the new account is usable: no line");
+  assert.equal(sendBlock({ ...base, runtimes: rt("acct-70c53cc54fd1"), pools }), "", "and no paused composer");
+  assert.match(connLine({ ...base, runtimes: rt("acct-d6f9c7186766"), pools }).text, /^Paused until /, "the current account's pool closed: as before");
+  assert.match(connLine({ ...base, runtimes: rt(undefined), pools }).text, /^Paused until /, "an unknown account: as before");
+  assert.equal(connLine({ ...base, runtimes: rt("acct-new"), pools }), null, "an account with no pool row yet counts as open");
+  const paid = { "claude_code:acct-old": { pool: "claude_code:acct-old", state: "paid" } };
+  assert.equal(connLine({ ...base, runtimes: rt("acct-new"), pools: paid }), null, "paid on an old account: no line");
+  assert.equal(currentPools(pools, rt("acct-70c53cc54fd1")).length, 1);
+  assert.equal(currentPools({ p: { state: "closed" } }, rt("x")).length, 1, "an id that isn't runtime:account still counts");
 });
 await (async () => {
   let peak = 0, now = 0;
