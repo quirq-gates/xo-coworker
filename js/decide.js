@@ -336,7 +336,7 @@ export function createDecisions({ world, P, rules, PROJ, announce, render, later
     if (F.open) F.status.set(n.key, no ? "back" : "allow");
     queue.push([{ key: n.key, n, t: n.t, ask: n.ask, choice: { storm: true, body }, note: "", stopped: false, entry }], { verb, label: said || it.title, deny: no });
     sound.play(no ? "back" : "allow");
-    announce(done ? `Done: ${n.t.title} will be resolved. Undo for 3 seconds.` : `${verb}${said ? `: ${said}` : ""}. Undo for 3 seconds.`);
+    announce(`${verb}${said ? `: ${said}` : ""}. Undo for 3 seconds.`);
     toastRender();
     render();
     return entry;
