@@ -146,6 +146,7 @@ export function mountShell(host, { id, ticket = null, on = {}, keys = () => true
       const what = closeMeaning(ev.code);
       if (what === "ended") return end("ended", { code: ev.code, reason: ev.reason });
       if (what === "off") return end("off", { reason: ev.reason || "Shells are turned off." });
+      if (what === "full") return end("error", { reason: "This shell is already open in too many places (8 at most). Close it in another tab or window, then try again." });
       if (what === "refused") return end("error", { reason: ev.reason || `The server refused the connection (${ev.code}).` });
       retry(opened ? "Connection lost" : "Can't reach the shell");
     };

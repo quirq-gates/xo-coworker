@@ -63,7 +63,7 @@ The UI reads and writes your real XO workspace. **Sending a message starts real 
     detached and when it closes, with Open, Rename, Close and Close all detached. Closing asks first when
     something other than the shell is running. The list is polled every 15 s while on screen, else every 60 s.
   - The socket: `…/ws` through serve.py, the ticket as the first message (never in the URL), a fresh ticket on every
-    reconnect (with backoff), `pause`/`resume` from xterm's write callbacks (100 KB / 10 KB).
+    reconnect (with backoff; none after 4404, 4403 or 4429, too many viewers, which is said in words), `pause`/`resume` from xterm's write callbacks (100 KB / 10 KB).
   - Inside a shell every key is the shell's (Esc, Ctrl+K…) except the toggle (`` mod+` ``). Ctrl+Shift+C / V copy and paste.
 
 **The backend does not have these yet**, so the UI hides or degrades them (see `docs/requirements.md`):

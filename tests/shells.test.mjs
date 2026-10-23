@@ -101,6 +101,7 @@ t("backoff grows to 15 s; close codes say whether to retry", () => {
   assert.equal(closeMeaning(4404), "ended");
   assert.equal(closeMeaning(1000), "ended");
   assert.equal(closeMeaning(4403), "off");
+  assert.equal(closeMeaning(4429), "full");
   assert.equal(closeMeaning(1008), "refused");
   assert.equal(closeMeaning(4401), "retry");
   assert.equal(closeMeaning(1006), "retry");

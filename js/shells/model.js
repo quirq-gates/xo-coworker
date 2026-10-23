@@ -116,11 +116,13 @@ export const backoff = (n, rand = Math.random) => Math.round(Math.min(15000, 500
 
 /**
  * What a socket close means: "ended" (the shell is gone or finished; don't retry), "off" (shells
- * were turned off), "refused" (a protocol error from us; don't loop), or "retry".
+ * were turned off), "full" (too many viewers on it already; don't retry), "refused" (a protocol
+ * error from us; don't loop), or "retry".
  */
 export function closeMeaning(code) {
   if (code === 4404 || code === 1000) return "ended";
   if (code === 4403) return "off";
+  if (code === 4429) return "full"; // the shell already has as many viewers as the backend allows
   if (code === 1008 || code === 1009) return "refused";
   return "retry"; // 4401 (a stale ticket: the retry fetches a fresh one), 1006 (network, serve.py restart)…
 }
