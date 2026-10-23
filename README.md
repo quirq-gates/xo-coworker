@@ -29,6 +29,10 @@ python3 serve.py                 # foreground, http://127.0.0.1:5180
 | `HOST`   | `127.0.0.1`             | bind address                  |
 
 `serve.py` (standard library only) serves the files and reverse-proxies `/api/*` to `XO_API`:
+- It answers only requests addressed to it as `localhost` or an IP address on its own port, or as a hostname
+  through a proxy on the same machine (Coder's app proxy: a loopback peer, and a Host not on serve.py's port,
+  which a page reaching serve.py directly always sends). Anything else, static files included, gets a 421
+  before any routing, so a DNS-rebinding page never reaches the backend.
 - It answers only pages it served: a request from any other page, read or write, gets a 403.
 - It never forwards the backend routes this UI doesn't use that expose secret values, raw files or file writes
   under `$HOME`, however they are spelled, and refuses a path with `#` or dot segments.
