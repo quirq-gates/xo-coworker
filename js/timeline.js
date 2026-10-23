@@ -49,6 +49,16 @@ export function mergeRows(list, incoming) {
 const bySeq = (a, b) => (a.seq ?? Infinity) - (b.seq ?? Infinity) || (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0);
 
 /**
+ * Your message in a thread that waits for its agent's running turn to end: stored after the turn
+ * started and not one of its wakes (`msg:<id>`). A thread message never joins a running turn, so it
+ * waits until the turn ends, or until a Stop ends it and the message runs next.
+ */
+export function waitsForTurn(m, turn) {
+  return !!(turn && turn.status === "running" && m && m.who === "you" && m.id && m.seq != null && turn.seq != null &&
+    m.seq > turn.seq && !(turn.wakes || []).includes(`msg:${m.id}`));
+}
+
+/**
  * Optimistic rows whose server copy is already in `rows` (the stream can beat
  * the POST). Returns Map(localId → serverId). A server row is used once, and
  * only if no other local row claimed it (`taken`).

@@ -17,7 +17,7 @@ import { createPacing } from "./pacing.js";
 import { createIntel } from "./intel.js";
 import { EFFORT, estLine, evidenceFor } from "./content.js";
 import { ICON, XO, NEXT_GLYPH, $, $$, RM, clock, dayOf, short, elapsed, reconcile, sound, wait, dial, morph, expand } from "./ui.js";
-import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText, hopLine, sharedFileRoute, relayedInto } from "./timeline.js";
+import { uiMsg, echoes, threadAnchors, parseTarget as targetOf, stripTarget, sendErrorTitle, connLine, sendBlock, plainText, hopLine, sharedFileRoute, relayedInto, waitsForTurn } from "./timeline.js";
 import { turnHtml } from "./turnview.js";
 import { itemParts } from "./review.js";
 import { runsStripHtml, runsListHtml, runViewHtml } from "./runsview.js";
@@ -471,11 +471,13 @@ function messagesOf(conv) {
   }
   const ids = t ? [] : world.state.threads.filter((x) => x.project === chat).map((x) => x.id);
   const { on, alone } = threadAnchors(rows, ids);
+  // the thread's running turn: your messages sent after it started wait for it to end
+  const turn = t && t.busy && t.sessionId && st.turns ? st.turns.running(t.sessionId) : null;
   for (const m of rows) {
     const key = S.alias.get(m.id) || m.id;
     const base = { key, at: m.at, seq: m.seq, text: m.text, sent: S.alias.has(m.id), files: m.files, chatId: m.chatId };
     if (m.who === "you") {
-      out.push({ ...base, who: "you", fwd: conv !== "ws" && m.fwd ? m.fwd : null, routed: conv === "ws" ? st.routed[m.id] || null : null });
+      out.push({ ...base, who: "you", fwd: conv !== "ws" && m.fwd ? m.fwd : null, routed: conv === "ws" ? st.routed[m.id] || null : null, queued: waitsForTurn(m, turn) });
       if (alone.has(m.id)) out.push({ key: `${m.id}:card`, at: m.at, who: "card", thread: m.id });
     } else if (m.who === "system") out.push({ ...base, who: "system", passedOn: m.passedOn });
     else if (t && m.who === "agent" && /^✓\s/.test(m.text)) out.push({ key, at: m.at, who: "event", text: m.text.replace(/^✓\s*/, ""), tone: "ok" });
@@ -567,6 +569,18 @@ function threadCardHtml(tid, needs) {
     (n ? `<button type="button" class="tc-dec" data-decide="${esc(n.key)}">Decide</button>` : "") + `</div>`;
 }
 
+/** Under your message that waits for the agent's turn to end: what happens to it, and Interrupt. */
+function queuedMeta(conv) {
+  const t = convThread(conv);
+  if (!t) return "";
+  if (S.stops.has(t.sessionId) || world.act.sessionState(t.sessionId) === "stopping") return `<div class="meta"><i class="spin" aria-hidden="true"></i><span>Stopping its turn · it reads this next</span></div>`;
+  const run = conv === S.view ? running() : null;
+  const n = workingRuns(t);
+  const title = `Stop the agent's current turn${n ? ` and its ${n} sub-agent${n === 1 ? "" : "s"}` : ""} so it reads this now (Undo for 3 s)`;
+  return `<div class="meta"><span>Waiting · the agent reads this when its current turn ends</span>` +
+    (run && run.kind === "thread" ? `<button type="button" class="meta-btn" data-interrupt title="${esc(title)}">${ICON.bolt}Interrupt</button>` : "") + `</div>`;
+}
+
 function nameOf(conv, who) {
   if (who === "coord") return [conv === "ws" ? "Coordinator" : `${PROJ(convProject(conv))} coordinator`, ""];
   const t = convThread(conv);
@@ -579,6 +593,8 @@ function msgItems(conv, needs) {
   const items = [];
   let day = "", prev = null;
   const lastYou = [...list].reverse().find((m) => m.who === "you");
+  // your newest message the agent hasn't read yet: Interrupt stops the turn so it reads it next
+  const lastQueued = [...list].reverse().find((m) => m.queued);
   for (const m of list) {
     const d = Number.isFinite(m.at) ? dayOf(m.at) : day;
     if (d !== day) { items.push({ key: "day|" + d, html: `<div class="day" role="separator"><span>${esc(d)}</span></div>` }); day = d; prev = null; }
@@ -588,6 +604,7 @@ function msgItems(conv, needs) {
       let meta = "";
       if (m.status === "sending") meta = `<div class="meta"><i class="spin" aria-hidden="true"></i>Sending</div>`;
       else if (m.status === "failed") meta = `<div class="meta is-err"><span${m.err ? ` title="${esc(m.err.text)}"` : ""}>${m.err ? esc(m.err.title) : "Not sent"}</span><button type="button" class="meta-btn" data-retry="${esc(m.id)}">${ICON.retry}Retry</button><button type="button" class="meta-btn" data-edit="${esc(m.id)}">${ICON.edit}Edit</button></div>`;
+      else if (m === lastQueued) meta = queuedMeta(conv);
       else if (m === lastYou && (m.status === "sent" || m.sent)) meta = `<div class="meta"><time>${clock(m.at)}</time><span class="sent">Sent ${ICON.check}</span></div>`;
       let route = "";
       if (m.waiting) route = `<div class="route-row"><i class="dash" aria-hidden="true"></i>Sent to <b>${esc(m.target === "workspace" ? "the coordinator" : PROJ(m.target))}</b> · waiting for a thread</div>`;
@@ -825,13 +842,17 @@ function checklistRender(needs) {
 // ── sub-agents (U2, ch 14 §11): working now under the checklist; the list and each run in a sheet ──
 const LIVE_RUN = (r) => r.state === "running" || r.state === "waiting";
 const runsAsked = new Map(); // session → the working count its runs were last listed for
+/** How many of a thread's sub-agents work now, by the best count known (the stream's, or the thread's). */
+function workingRuns(t) {
+  const lr = (world.state.liveRuns || {})[t.sessionId];
+  return Math.max((t.runs && (t.runs.running || 0) + (t.runs.waiting || 0)) || 0, lr ? lr.running + lr.waiting : 0, (t.session && t.session.live_runs) || 0);
+}
 function runsStrip(t) {
   if (!t.sessionId || !world.state.runs) return "";
   const mine = [...world.state.runs.values()].filter((r) => r.session === t.sessionId && !r.hidden);
   const live = mine.filter((r) => LIVE_RUN(r) && (r.depth || 1) === 1);
   // after a reload the stream hasn't named the runs still working: the thread's counts know, so list them
-  const lr = (world.state.liveRuns || {})[t.sessionId];
-  const working = Math.max((t.runs && (t.runs.running || 0) + (t.runs.waiting || 0)) || 0, lr ? lr.running + lr.waiting : 0, (t.session && t.session.live_runs) || 0);
+  const working = workingRuns(t);
   // asked once per count: if the thread's counts stay stale after a read, the read isn't repeated
   if (working > mine.filter(LIVE_RUN).length && runsAsked.get(t.sessionId) !== working) {
     runsAsked.set(t.sessionId, working);
@@ -1468,13 +1489,14 @@ $("#iq").addEventListener("click", () => { if (IQ.isOpen) IQ.close(); else IQ.op
  * Live Stop: nothing is sent for 3 s (Undo), then the session's turn and its sub-agents stop at once
  * (POST /api/chat/abort). The turn's own record then says what ran: "Stopped after …".
  */
-function stopLive(run) {
+function stopLive(run, { interrupt = false, runs = 0 } = {}) {
   const what = run.kind === "thread" ? run.t.title : run.kind === "chat" ? "This chat" : run.conv === "ws" ? "The coordinator" : `${PROJ(chatOf(run.conv))} coordinator`;
   // the turn you chose to stop: if it ends inside the window and another starts, that one is left alone
-  const token = { session: run.session, turn: world.act.turnOf(run.session), what, until: Date.now() + Kit.COMMIT_MS, cancelled: false, sent: false };
+  const token = { session: run.session, turn: world.act.turnOf(run.session), what, interrupt, until: Date.now() + Kit.COMMIT_MS, cancelled: false, sent: false };
   S.stops.set(run.session, token);
   stopsHerald();
-  announce(`Stopping ${what} in 3 seconds. Undo to keep it working.`);
+  const also = runs ? ` and its ${runs} sub-agent${runs === 1 ? "" : "s"}` : "";
+  announce(interrupt ? `Interrupting ${what}${also} in 3 seconds, so it reads your message next. Undo to let it finish.` : `Stopping ${what} in 3 seconds. Undo to keep it working.`);
   sound.play("back");
   schedule();
   setTimeout(async () => {
@@ -1484,6 +1506,13 @@ function stopLive(run) {
     const now = world.act.turnOf(token.session);
     if (token.turn && now !== token.turn) {
       S.stops.delete(token.session);
+      if (interrupt) {
+        // its next turn is the one that reads your message
+        heraldShow({ kind: "halt", text: "It had already finished", sub: `${what} · it reads your message next` }, 4200);
+        announce("It had already finished that turn. It reads your message next.");
+        schedule();
+        return;
+      }
       heraldShow({ kind: "halt", text: "It had already finished", sub: now ? `${what} · its next turn goes on` : what }, 4200);
       announce(now ? "It had already finished that turn. The next one goes on; Stop again to end it." : "It had already finished.");
       schedule();
@@ -1491,11 +1520,17 @@ function stopLive(run) {
     }
     try {
       const r = await world.act.stop(token.session);
-      heraldShow({ kind: "halt", text: r && r.stopped === false ? "It had already finished" : "Stopped", sub: r && r.stopped === false ? what : `${what} · what it did is kept` }, 4200);
-      announce(r && r.stopped === false ? "It had already finished." : `Stopped ${what}. What it did is kept.`);
+      const done = r && r.stopped === false;
+      if (interrupt) {
+        heraldShow({ kind: "halt", text: done ? "It had already finished" : "Interrupted", sub: `${what} · it reads your message next` }, 4200);
+        announce(done ? "It had already finished. It reads your message next." : `Interrupted ${what}. What it did is kept, and it reads your message next.`);
+      } else {
+        heraldShow({ kind: "halt", text: done ? "It had already finished" : "Stopped", sub: done ? what : `${what} · what it did is kept` }, 4200);
+        announce(done ? "It had already finished." : `Stopped ${what}. What it did is kept.`);
+      }
     } catch (err) {
       // Retry stops the same session, wherever you are when you press it
-      heraldShow({ kind: "stopped", text: "Couldn't stop it", sub: `${what} · ${err.message}`, undo: () => stopLive(run), undoLabel: "Retry" }, 7000);
+      heraldShow({ kind: "stopped", text: interrupt ? "Couldn't interrupt it" : "Couldn't stop it", sub: `${what} · ${err.message}`, undo: () => stopLive(run, { interrupt, runs }), undoLabel: "Retry" }, 7000);
     } finally {
       if (S.stops.get(token.session) === token) S.stops.delete(token.session);
       schedule();
@@ -1512,7 +1547,7 @@ function stopsHerald() {
   const all = [...turns, ...runs];
   if (!all.length) { if (S.herald && S.herald.tag === "stops") { S.herald.until = 0; heraldNext(); } return; }
   const last = Math.max(...all.map((x) => x.until));
-  heraldShow({ kind: "halt", tag: "stops", text: "Stopping", sub: all.map((x) => x.what).join(", "), undo: () => {
+  heraldShow({ kind: "halt", tag: "stops", text: all.every((x) => x.interrupt) ? "Interrupting" : "Stopping", sub: all.map((x) => x.what).join(", "), undo: () => {
     for (const x of turns) { x.cancelled = true; if (S.stops.get(x.session) === x) S.stops.delete(x.session); }
     for (const j of runs) { j.cancelled = true; const i = pendingStops.indexOf(j); if (i >= 0) pendingStops.splice(i, 1); }
     announce(all.length > 1 ? "Not stopped. They keep working." : "Not stopped. It keeps working.");
@@ -1524,6 +1559,14 @@ function stopsHerald() {
 function stopRun() {
   const run = running();
   if (run) stopLive(run);
+}
+/**
+ * Interrupt: the same Stop, from your message that waits for the turn to end. Storm runs that
+ * message as the agent's next turn once the stopped one ends; a thread message has no "send now".
+ */
+function interruptRun() {
+  const run = running();
+  if (run && run.kind === "thread") stopLive(run, { interrupt: true, runs: workingRuns(run.t) });
 }
 
 function lift(el, from) {
@@ -1972,6 +2015,7 @@ document.addEventListener("click", (e) => {
   if (t.closest("[data-nx-cancel]")) { const card = $("#hm-next .next"); morph(card, () => { card.classList.remove("noting"); card.querySelector(".nx-note").hidden = true; }, { duration: 260 }); card.focus({ preventScroll: true }); return; }
   const r = t.closest("[data-retry]");
   if (r) { retry(r.dataset.retry); return; }
+  if (t.closest("[data-interrupt]")) { interruptRun(); return; }
   const ed = t.closest("[data-edit]");
   if (ed) { editFailed(ed.dataset.edit); return; }
   const ab = t.closest("[data-att]");

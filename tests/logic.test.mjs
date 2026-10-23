@@ -7,7 +7,7 @@ import { renderMarkdown, renderInline, threadLinks, excerptMarkdown } from "../j
 import { parseChecklist, tasksOf } from "../js/model.js";
 import { request } from "../js/api.js";
 import { highlight, langOf } from "../js/highlight.js";
-import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sharedFileRoute, relayedInto, sendBlock, mapLimit, plainText, hopLine } from "../js/timeline.js";
+import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sharedFileRoute, relayedInto, sendBlock, mapLimit, plainText, hopLine, waitsForTurn } from "../js/timeline.js";
 
 let passed = 0;
 const t = (name, fn) => {
@@ -274,6 +274,19 @@ t("a message relayed into a thread shows there, as yours (if1 #7)", () => {
   assert.equal(shown[0].who, "you"); assert.equal(shown[0].seq, 1792); assert.equal(shown[0].fwd.id, "cmsg_ws");
   assert.deepEqual(missing, [{ ids: ["cmsg_old"], seq: 722 }], "not loaded: paged back from the hop's seq");
   assert.equal(relayedInto(th, hops, tl, new Set(["cmsg_fwd"])).shown.length, 0, "never twice in the thread");
+});
+
+t("a thread message sent during a turn waits for it (Interrupt)", () => {
+  const turn = { id: "turn_1", status: "running", seq: 500, wakes: ["msg:cmsg_a"] };
+  const you = (id, seq) => ({ id, seq, who: "you" });
+  assert.equal(waitsForTurn(you("cmsg_a", 490), turn), false, "the message that woke the turn");
+  assert.equal(waitsForTurn(you("cmsg_b", 510), turn), true, "sent after it started");
+  assert.equal(waitsForTurn(you("cmsg_a", 510), turn), false, "one the turn took");
+  assert.equal(waitsForTurn({ ...you("cmsg_c", 510), who: "agent" }, turn), false, "only yours");
+  assert.equal(waitsForTurn(you("cmsg_d", null), turn), false, "not stored yet");
+  assert.equal(waitsForTurn(you("cmsg_e", 510), { ...turn, status: "finished" }), false, "no turn running");
+  assert.equal(waitsForTurn(you("cmsg_f", 510), null), false);
+  assert.equal(waitsForTurn(you("cmsg_g", 510), { id: "turn_2", status: "running", seq: 500 }), true, "a turn that names no wakes");
 });
 
 // ── a request that never settles gives up (if1 #6) ─────────────────────────
