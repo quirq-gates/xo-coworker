@@ -6,7 +6,8 @@
 
 Serves the files in this folder and forwards every /api/* request to the
 XO Space backend (XO_API, default http://127.0.0.1:5002). Server-Sent Event
-responses are relayed chunk by chunk with no buffering.
+responses are relayed chunk by chunk with no buffering, and a shell's terminal
+WebSocket is tunnelled as raw bytes (the only upgrade it allows).
 
 Why a proxy: the backend refuses browser writes whose Origin it does not
 recognise. This server is the browser's origin, so it applies its own
@@ -21,7 +22,8 @@ What it refuses, whatever the page asks:
 - the routes this UI never uses that expose secret values, raw files or
   file writes anywhere under $HOME (NEVER_FORWARD), in every spelling;
 - a request path with "#" or "." / ".." segments, raw or encoded;
-- a body over 1 MiB, except an attachment upload (up to 25 MiB).
+- a body over 1 MiB, except an attachment upload (up to 25 MiB);
+- any upgrade but a shell's WebSocket (WS_PATH).
 
 Standard library only.
 """
@@ -34,6 +36,7 @@ import os
 import re
 import socket
 import sys
+import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
@@ -203,6 +206,17 @@ UPLOAD = re.compile(r"^/api/chat/chats/[^/]+/attachments$")
 MAX_UPLOAD = 25 * (1 << 20) + (64 << 10)
 
 
+# The one WebSocket this UI opens: a shell's terminal. Every other upgrade is refused.
+WS_PATH = re.compile(r"^/api/terminal/sessions/[A-Za-z0-9_-]{16,64}/ws$")
+
+
+def ws_header(name: str) -> bool:
+    """True for a request header a tunnelled handshake carries upstream: Upgrade, Connection, Sec-WebSocket-*.
+    Never Origin (we judged it), cookies, the Coder token or X-Forwarded-*."""
+    name = name.lower()
+    return name in ("upgrade", "connection") or name.startswith("sec-websocket-")
+
+
 def max_body(method: str, path: str) -> int:
     """The largest request body forwarded for this route: MAX_UPLOAD for an attachment upload, else MAX_BODY."""
     return MAX_UPLOAD if method == "POST" and UPLOAD.match(path.split("?", 1)[0]) else MAX_BODY
@@ -238,16 +252,22 @@ class Handler(SimpleHTTPRequestHandler):
 
     # ── routing ──────────────────────────────────────────────────────────────
     def do_GET(self):
+        if "Upgrade" in self.headers:
+            return self._tunnel()
         if self._is_api():
             return self._proxy()
         return super().do_GET()
 
     def do_HEAD(self):
+        if "Upgrade" in self.headers:
+            return self._tunnel()
         if self._is_api():
             return self._proxy()
         return super().do_HEAD()
 
     def do_POST(self):
+        if "Upgrade" in self.headers:
+            return self._tunnel()
         return self._proxy() if self._is_api() else self.send_error(405)
 
     do_PUT = do_PATCH = do_DELETE = do_POST
@@ -354,6 +374,65 @@ class Handler(SimpleHTTPRequestHandler):
             pass  # the browser went away
         finally:
             conn.close()
+
+    # ── WebSocket tunnel ─────────────────────────────────────────────────────
+    def _tunnel(self):
+        """Relay a shell's WebSocket to the backend: the checks of `_proxy`, a handshake carrying only the
+        WebSocket headers, then raw bytes both ways until either side ends. Every other upgrade is refused."""
+        self.close_connection = True  # an upgrade's connection is never reused for another request
+        path = self.path.split("?", 1)[0]
+        if self.command != "GET" or self.headers.get("Upgrade", "").strip().lower() != "websocket":
+            return self._json_error(400, "bad_upgrade", "This server only upgrades a GET to a WebSocket.")
+        if odd_path(self.path):
+            return self._json_error(400, "bad_target", "This UI never sends a request path like this.")
+        if not WS_PATH.match(path):
+            return self._json_error(404, "not_found", "No WebSocket route here.")
+        # Browsers apply neither CORS nor the same-origin policy to a WebSocket, but always send its Origin.
+        if not self._write_allowed():
+            return self._json_error(403, "cross_origin", "This is only answered for pages served by this UI.")
+        if _UP.scheme != "http":
+            # One TLS connection can't be read and written from two threads at once.
+            return self._json_error(502, "upstream_unsupported", "The shell's WebSocket is only tunnelled to an http XO_API.")
+        try:
+            up = socket.create_connection((_UP.hostname, _UP.port or 80), timeout=10)
+        except OSError as exc:
+            return self._json_error(502, "upstream_unreachable",
+                                    f"Could not reach the XO API at {XO_API} ({type(exc).__name__}).")
+        # The query is dropped, and with it coder_session_token; the shell's ticket comes in the first message.
+        lines = [f"GET {_UP.path.rstrip('/')}{path} HTTP/1.1", f"Host: {_UP.netloc}"]
+        lines += [f"{k}: {' '.join(v.split())}" for k, v in self.headers.items() if ws_header(k)]
+        try:
+            up.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
+        except OSError as exc:
+            up.close()
+            return self._json_error(502, "upstream_unreachable",
+                                    f"Could not reach the XO API at {XO_API} ({type(exc).__name__}).")
+        up.settimeout(None)
+        self.wfile.flush()
+        client = self.connection
+        self.log_message("WebSocket open %s", path)
+
+        def pump(read, dst):
+            try:
+                while chunk := read(65536):
+                    dst.sendall(chunk)
+            except OSError:
+                pass
+            finally:  # either side ending ends both
+                for s in (client, up):
+                    try:
+                        s.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+
+        back = threading.Thread(target=pump, args=(up.recv, client), daemon=True)
+        back.start()
+        # Read the client through rfile: bytes it sent right behind the handshake may already sit in rfile's
+        # buffer, and read1 hands those over first, then reads the socket as more come (one read at a time).
+        pump(self.rfile.read1, up)
+        back.join(5)
+        up.close()
+        self.log_message("WebSocket closed %s", path)
 
     def _relay_stream(self, resp):
         """Forward an SSE body as it arrives: no buffering, flush every chunk."""

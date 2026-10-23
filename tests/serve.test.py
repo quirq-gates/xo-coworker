@@ -13,8 +13,9 @@ import http.client
 import importlib.util
 import json
 import os
-import sys
+import socket
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -24,13 +25,17 @@ REBIND_HOST = "rebind.attacker.example"
 
 
 # ── a backend that records what it was sent ──────────────────────────────────
-SEEN: list[dict] = []  # {"method", "path", "headers"} of every request the backend got
+SEEN: list[dict] = []  # {"method", "path", "headers", "body"} of every request the backend got
 
 
 class Backend(BaseHTTPRequestHandler):
+    """Answers JSON; a WebSocket handshake gets a 101, a greeting, then an echo of every byte
+    until the client sends b"quit" or goes away."""
     protocol_version = "HTTP/1.1"
 
     def _answer(self):
+        if self.headers.get("Upgrade", "").lower() == "websocket":
+            return self._echo()
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
         SEEN.append({"method": self.command, "path": self.path, "headers": dict(self.headers.items()),
@@ -41,6 +46,15 @@ class Backend(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _echo(self):
+        SEEN.append({"method": self.command, "path": self.path, "headers": dict(self.headers.items()),
+                     "body": b""})
+        self.close_connection = True
+        self.wfile.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                         b"Connection: Upgrade\r\nSec-WebSocket-Accept: test\r\n\r\nhello|")
+        while (chunk := self.rfile.read1(65536)) and chunk != b"quit":
+            self.wfile.write(chunk)
 
     do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _answer
 
@@ -125,6 +139,35 @@ def rebinding(**extra) -> dict:
     believes it is same-origin, so the labels match the Host."""
     return {"Host": f"{REBIND_HOST}:{PORT}", "Origin": f"http://{REBIND_HOST}:{PORT}",
             "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors", **extra}
+
+
+SESSION = "/api/terminal/sessions/term_0123456789abcdef/ws"
+
+
+def handshake(path: str = SESSION, headers: dict | None = None, method: str = "GET") -> bytes:
+    headers = {**local(), "Origin": f"http://localhost:{PORT}", "Upgrade": "websocket", "Connection": "Upgrade",
+               "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Version": "13",
+               **(headers or {})}
+    return (f"{method} {path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+            + "\r\n").encode()
+
+
+def read_until(sock: socket.socket, want: bytes, have: bytes = b"") -> bytes:
+    """Read from `sock` until `want` has arrived (or the peer closes, or 5 s pass)."""
+    sock.settimeout(5)
+    while want not in have:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        have += chunk
+    return have
+
+
+def wait_for(cond, seconds: float = 5) -> bool:
+    end = time.monotonic() + seconds
+    while not cond() and time.monotonic() < end:
+        time.sleep(0.01)
+    return cond()
 
 
 SCHEDULE = json.dumps({"name": "x", "command": "touch /tmp/pwned"}).encode()
@@ -270,6 +313,97 @@ class OriginCheck(unittest.TestCase):
 
     def test_no_page(self):
         self.assertEqual(self.post(local()), 200)  # curl, a script
+
+
+class Tunnel(unittest.TestCase):
+    def setUp(self):
+        SEEN.clear()
+        LOG.clear()
+        self.sock = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+
+    def tearDown(self):
+        self.sock.close()
+
+    def open(self, path: str = SESSION, headers: dict | None = None, method: str = "GET",
+             then: bytes = b"") -> bytes:
+        """Send a handshake (and `then`, in the same packet); return what came back up to the greeting."""
+        self.sock.sendall(handshake(path, headers, method) + then)
+        return read_until(self.sock, b"hello|")
+
+    def refused(self, status: int, code: str, *args, **kwargs):
+        got = read_until(self.sock, b"}}", self.open(*args, **kwargs))
+        self.assertTrue(got.startswith(b"HTTP/1.1 %d " % status), got)
+        self.assertIn(b'"code":"%s"' % code.encode(), got)
+        self.assertEqual(SEEN, [], "the backend must never see a refused upgrade")
+
+    def test_bytes_flow_both_ways(self):
+        # Bytes sent right behind the handshake reach the backend too (they sat in rfile's buffer).
+        got = self.open(then=b"early|")
+        self.assertTrue(got.startswith(b"HTTP/1.1 101 "), got)
+        got = read_until(self.sock, b"early|", got)
+        self.assertTrue(got.endswith(b"hello|early|"), got)
+        for i in range(3):
+            self.sock.sendall(b"key%d|" % i)
+            self.assertTrue(read_until(self.sock, b"key%d|" % i).endswith(b"key%d|" % i))
+        big = os.urandom(300_000)
+        self.sock.sendall(big)
+        got = b""
+        while len(got) < len(big):
+            chunk = self.sock.recv(65536)
+            self.assertTrue(chunk, "the tunnel closed early")
+            got += chunk
+        self.assertEqual(got, big)
+
+    def test_forwarded_handshake(self):
+        self.open(SESSION + "?coder_session_token=secret&x=1", coder(**{
+            "Origin": f"https://{CODER_HOST}", "Cookie": "coder_session_token=secret; a=b",
+            "Coder-Session-Token": "secret", "Sec-WebSocket-Protocol": "xo.term", "User-Agent": "test",
+            "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "websocket"}))
+        self.assertEqual(len(SEEN), 1)
+        self.assertEqual(SEEN[0]["path"], SESSION)  # no query: no token
+        sent = {k.lower(): v for k, v in SEEN[0]["headers"].items()}
+        self.assertEqual(set(sent), {"host", "upgrade", "connection", "sec-websocket-key", "sec-websocket-version",
+                                     "sec-websocket-protocol"})
+        self.assertEqual(sent["host"], serve._UP.netloc)
+        self.assertNotIn("secret", json.dumps(SEEN[0]["headers"]))
+
+    def test_logs_open_and_close_without_the_query(self):
+        # Its own session id: another test's tunnel may still be logging its close.
+        path = "/api/terminal/sessions/term_logs_0123456789/ws"
+        mine = lambda: [line for line in LOG if path in line]
+        self.open(path + "?coder_session_token=secret")
+        self.sock.sendall(b"quit")  # the backend ends: the browser's side is shut too
+        self.assertEqual(read_until(self.sock, b"never"), b"")
+        self.assertTrue(wait_for(lambda: len(mine()) == 2), LOG)
+        self.assertEqual(mine(), [f"WebSocket open {path}", f"WebSocket closed {path}"])
+
+    def test_browser_going_away_closes_the_backend_side(self):
+        path = "/api/terminal/sessions/term_away_0123456789/ws"
+        self.open(path)
+        self.sock.close()
+        self.assertTrue(wait_for(lambda: f"WebSocket closed {path}" in LOG), LOG)
+
+    def test_other_upgrades_are_refused(self):
+        cases = {
+            "another API path": ("/api/chat/chats/ws", {}, "GET", 404, "not_found"),
+            "a short session id": ("/api/terminal/sessions/abc/ws", {}, "GET", 404, "not_found"),
+            "a static path": ("/index.html", {}, "GET", 404, "not_found"),
+            "a dot segment": ("/api/terminal/sessions/%2e%2e/sessions/term_0123456789abcdef/ws", {}, "GET",
+                              400, "bad_target"),
+            "not websocket": (SESSION, {"Upgrade": "h2c"}, "GET", 400, "bad_upgrade"),
+            "a POST": (SESSION, {"Content-Length": "0"}, "POST", 400, "bad_upgrade"),
+        }
+        for label, (path, headers, method, status, code) in cases.items():
+            with self.subTest(label):
+                self.sock.close()
+                self.sock = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+                self.refused(status, code, path, headers, method)
+
+    def test_page_from_another_site(self):
+        self.refused(403, "cross_origin", headers={"Origin": "http://evil.example"})
+
+    def test_rebinding_host(self):
+        self.refused(421, "bad_host", headers=rebinding(Origin=f"http://{REBIND_HOST}:{PORT}"))
 
 
 if __name__ == "__main__":
