@@ -99,6 +99,16 @@ export function askText(md, max = 140) {
   return { title, rest: s.slice(used).trim() };
 }
 
+/**
+ * The thread's state as shown, given its session's running turn (or null). A stopped turn leaves
+ * the thread at needs_reply (ch 11 §7.3) until its next input ends; after an Interrupt that input is
+ * already your message, running, so the thread isn't waiting on you.
+ */
+export function threadState(state, turn) {
+  if (state === "needs_reply" && turn && turn.status === "running" && turn.origin === "person") return "working";
+  return state || "working";
+}
+
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).replace(/\s+\S*$/, "") + "…" : s);
 
 /**

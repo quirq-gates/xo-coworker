@@ -7,7 +7,7 @@ import { renderMarkdown, renderInline, threadLinks, excerptMarkdown } from "../j
 import { parseChecklist, tasksOf } from "../js/model.js";
 import { request } from "../js/api.js";
 import { highlight, langOf } from "../js/highlight.js";
-import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sharedFileRoute, relayedInto, sendBlock, mapLimit, plainText, hopLine, waitsForTurn } from "../js/timeline.js";
+import { uiMsg, mergeRows, echoes, askText, stormAsks, threadAnchors, parseTarget, stripTarget, sendErrorTitle, connLine, currentPools, sharedFileRoute, relayedInto, sendBlock, mapLimit, plainText, hopLine, waitsForTurn, threadState } from "../js/timeline.js";
 
 let passed = 0;
 const t = (name, fn) => {
@@ -287,6 +287,16 @@ t("a thread message sent during a turn waits for it (Interrupt)", () => {
   assert.equal(waitsForTurn(you("cmsg_e", 510), { ...turn, status: "finished" }), false, "no turn running");
   assert.equal(waitsForTurn(you("cmsg_f", 510), null), false);
   assert.equal(waitsForTurn(you("cmsg_g", 510), { id: "turn_2", status: "running", seq: 500 }), true, "a turn that names no wakes");
+});
+
+t("after an Interrupt, a thread running your message doesn't ask for a reply", () => {
+  const yours = { status: "running", origin: "person" };
+  assert.equal(threadState("needs_reply", yours), "working", "the stopped turn's needs_reply");
+  assert.equal(threadState("needs_reply", { ...yours, origin: "wake" }), "needs_reply", "a turn you didn't start");
+  assert.equal(threadState("needs_reply", { ...yours, status: "finished" }), "needs_reply");
+  assert.equal(threadState("needs_reply", null), "needs_reply", "a plain Stop still waits on you");
+  assert.equal(threadState("needs_approval", yours), "needs_approval");
+  assert.equal(threadState(undefined, null), "working");
 });
 
 // ── a request that never settles gives up (if1 #6) ─────────────────────────

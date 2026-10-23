@@ -13,7 +13,7 @@ import { api, clientId as newClientId, NEWEST, coderHeaders, STORM_DOWN } from "
 import { SSEStream } from "./sse.js";
 import { createTurns } from "./blocks.js";
 import { tasksOf } from "./model.js";
-import { uiMsg, mergeRows, stormAsks, mapLimit, currentPools } from "./timeline.js";
+import { uiMsg, mergeRows, stormAsks, mapLimit, currentPools, threadState } from "./timeline.js";
 import { hostOf } from "./review.js";
 
 const STATUS_MS = 30000;          // the engine's status (pools, review counts); frames carry the rest
@@ -78,10 +78,11 @@ export function stormSource(state, emit, event) {
     const project = projectOf(r.chat_id);
     const sstate = sessionStateOf(r);
     const card = r.card || {};
+    const turn = r.session_id && sstate && BUSY.has(sstate) ? state.turns.running(r.session_id) : null;
     const t = {
       id: r.ts, project, chatId: r.chat_id,
       title: r.title || "Thread", label: r.label || null,
-      state: r.state || "working",
+      state: threadState(r.state, turn),
       headline: "", happened: card.happened || "", needsYou: "",
       branch: r.branch || null, worktree: r.worktree_path || null, cwd: r.cwd || null,
       createdAt: Date.parse(r.created_at) || Date.now(), lastAt: Date.parse(r.updated_at) || Date.now(),
