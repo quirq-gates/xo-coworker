@@ -8,6 +8,7 @@
   <title>XO Space</title>
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
   <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./js/vendor/xterm/xterm.css">
   <link rel="stylesheet" href="./css/app.css">
 </head>
 <body>
@@ -25,6 +26,8 @@
         <button type="button" class="nrow" data-go="home" id="nv-home"><span class="nr-ic" id="ic-home"></span><span class="nr-name">Home</span><span class="nr-n" id="home-n"></span></button>
         <button type="button" class="nrow" data-go="ws" id="nv-ws"><span class="nr-ic nr-xo" id="ic-ws"></span><span class="nr-name">Workspace</span></button>
         <button type="button" class="nrow" data-go="chats" id="nv-chats"><span class="nr-ic" id="ic-chats"></span><span class="nr-name">Chats</span></button>
+        <!-- Shells (js/shells/): every shell, running or detached; shown only when the backend has them on -->
+        <button type="button" class="nrow" id="nv-shells" aria-haspopup="true" hidden><span class="nr-ic" id="ic-shells"></span><span class="nr-name">Shells</span><span class="nr-n nr-sh"></span></button>
       </nav>
       <div class="side-label"><span id="projects-label">Projects</span></div>
       <!-- a filter once the list is long (hub #16): typing narrows it, ↑ ↓ and Enter open one, Esc clears -->
@@ -135,6 +138,8 @@
         </div>
       </section>
     </main>
+    <!-- The shells' dock: under the main column, outside every view, so navigating never detaches a terminal -->
+    <section class="shd" id="shd" aria-label="Shells" hidden></section>
   </div>
 
   <!-- Create XO Project -->

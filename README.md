@@ -53,6 +53,18 @@ The UI reads and writes your real XO workspace. **Sending a message starts real 
 - **Sending:** `POST /chats/{chat}/messages {text, thread_ts?, attachments?}`. Your message appears at once and is replaced in place by the server's row. "Replying" follows the coordinator's real heartbeat. Errors use plain titles, with Retry and Edit.
 - **Open thread:** polled every 4 s while its agent is busy and every 15 s otherwise. "Working" means the session is actually busy. An idle one reads "Idle".
 - **Asks:** a thread waiting on you is titled from its agent's last message. You answer in words, as a thread reply.
+- **Shells (`/api/terminal/*`):** only when `GET /terminal/status` says `enabled`; otherwise no shell UI shows at all.
+  - Where they open: **Shell** beside All threads on a project (its folder), beside Next move on the Workspace
+    (the projects root), and in a thread's header (its worktree from `/chat/worktrees`, else the project folder).
+    Where shells already run, the button shows their count and opens their list.
+  - The dock under the main column holds them as tabs and survives navigation. Closing a tab only detaches; the
+    shell keeps running. A reload reattaches this browser tab's shells with their recent output.
+  - The sidebar's **Shells** row (the running count) opens the list: status, the program in front, watching or
+    detached and when it closes, with Open, Rename, Close and Close all detached. Closing asks first when
+    something other than the shell is running. The list is polled every 15 s while on screen, else every 60 s.
+  - The socket: `…/ws` through serve.py, the ticket as the first message (never in the URL), a fresh ticket on every
+    reconnect (with backoff), `pause`/`resume` from xterm's write callbacks (100 KB / 10 KB).
+  - Inside a shell every key is the shell's (Esc, Ctrl+K…) except the toggle (`` mod+` ``). Ctrl+Shift+C / V copy and paste.
 
 **The backend does not have these yet**, so the UI hides or degrades them (see `docs/requirements.md`):
 - approvals with an approve/deny route (R2);
@@ -77,12 +89,18 @@ The UI reads and writes your real XO workspace. **Sending a message starts real 
 | `js/intel.js` | the model and depth chip |
 | `js/content.js` | what an ask costs you, what it frees, and its evidence |
 | `js/ui.js` | icons and motion helpers |
+| `js/shells/dock.js` | shells: the dock, its tabs and list, the sidebar row; what `app.js` calls |
+| `js/shells/term.js` | one shell on screen: xterm.js, its WebSocket, reconnects, flow control, theme |
+| `js/shells/model.js` | shells, the pure part: row words, counts, flow-control watermarks, backoff |
+| `js/vendor/xterm/` | xterm.js 6.0.0 and addon-fit 0.11.0, copied byte for byte (pinned hashes in its README) |
 
 ## Tests
 
 ```sh
 node tests/logic.test.mjs        # pure modules; the live-data part only sends GETs through :5180
 node tests/attach.test.mjs       # files on a message and the hop line; no network
+node tests/shells.test.mjs       # shells' pure parts, and the vendored xterm hashes; no network
+python3 tests/serve.test.py      # serve.py: the Host allowlist and the WebSocket tunnel, against fake backends
 ```
 
 The browser suites (Playwright) live outside the repo:

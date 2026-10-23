@@ -155,6 +155,18 @@ const attPath = (chat, id) => `${BASE}/chat/chats/${enc(chat)}/attachments/${enc
  */
 export const attachmentUrl = (chat, id) => attPath(chat, id) + (coderToken ? `?${TOKEN_PARAM}=${enc(coderToken)}` : "");
 
+/**
+ * The ws(s):// URL of a shell's socket, relative to the page like every other call. A WebSocket
+ * can't send headers either, so inside Coder the token rides in the query; serve.py drops the
+ * whole query before the tunnel. The attach ticket never goes in the URL: it is the first message.
+ */
+export function terminalSocketUrl(id) {
+  const url = new URL(`${BASE}/terminal/sessions/${enc(id)}/ws`, location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.search = coderToken ? `?${TOKEN_PARAM}=${enc(coderToken)}` : "";
+  return url.href;
+}
+
 /** An attachment's text, for the viewer (the server always sends text as text/plain). */
 export async function attachmentText(chat, id, { signal } = {}) {
   const dl = deadline(signal, READ_MS);
@@ -303,6 +315,19 @@ export const api = {
   /** Scaffold a new xo-project (xo-cowork-api). 409 when the folder exists. */
   createProject: ({ path, displayName, description }) =>
     send("POST", "/files/mkdir", { path, scaffold: true, display_name: displayName, ...(description ? { description } : {}) }),
+
+  // ── shells (/api/terminal/*): T = {id, name, scope, project, path, cwd, status, foreground, viewers, …} ──
+  terminalStatus: () => get("/terminal/status"),
+  /** {project?, path?, workspace?: true} → {terminals: [T…]}, oldest first */
+  terminals: (query = {}) => get("/terminal/sessions", query),
+  terminal: (id) => get(`/terminal/sessions/${enc(id)}`),
+  /** {project?, path?, name?, rows?, cols?}; no project is a workspace shell → {terminal, ticket, ticket_expires_in} */
+  openTerminal: (body) => send("POST", "/terminal/sessions", body),
+  /** A fresh ticket to (re)attach: {ticket, ticket_expires_in} */
+  attachTerminal: (id) => send("POST", `/terminal/sessions/${enc(id)}/attach`),
+  renameTerminal: (id, name) => send("PATCH", `/terminal/sessions/${enc(id)}`, { name }),
+  /** Hangs up everything started in that shell, and forgets it. */
+  closeTerminal: (id) => send("DELETE", `/terminal/sessions/${enc(id)}`),
 
   // ── the one global stream ─────────────────────────────────────────────────
   streamUrl: () => `${BASE}/chat/stream`,
