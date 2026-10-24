@@ -14,6 +14,8 @@ A web UI for the XO Space **projects chat** backend (`/api/projects-chat/*`). It
 
 Plain HTML, CSS and vanilla ES modules: no build step, no npm, no CDN.
 
+A lightweight version (about 1,800 lines: Needs you, Workspace, projects, threads, live activity, Stop, Resolve, files) is in [`lite/`](lite/README.md): `python3 lite/serve.py`.
+
 ## Start
 
 ```sh

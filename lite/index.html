@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>XO Space</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+  <link rel="stylesheet" href="./css/lite.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="side" id="side" aria-label="Navigation">
+      <p class="brand"><img src="./favicon.svg" alt="" width="22" height="22"><b>XO Space</b><span>lite</span></p>
+      <nav id="nav"></nav>
+    </aside>
+    <main class="main">
+      <header class="bar">
+        <button type="button" class="menu" id="menu" aria-label="Menu" aria-controls="side" aria-expanded="false">☰</button>
+        <div class="bar-t" id="bar"></div>
+      </header>
+      <p class="banner" id="banner" hidden></p>
+      <div class="scroll" id="scroll">
+        <div class="head" id="head"></div>
+        <p class="older" id="older" hidden></p>
+        <div class="msgs" id="msgs"></div>
+        <div id="live"></div>
+        <p class="typing" id="typing" hidden></p>
+      </div>
+      <form class="composer" id="composer" hidden>
+        <ul class="tray" id="tray" hidden></ul>
+        <div class="row">
+          <label class="clip" title="Attach files (or paste, or drop)"><input type="file" id="file" multiple hidden>＋</label>
+          <textarea id="say" rows="1" placeholder="Message" aria-label="Message"></textarea>
+          <button type="submit" class="btn send" id="send">Send</button>
+        </div>
+      </form>
+    </main>
+  </div>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
